@@ -231,11 +231,19 @@ class Regression:
             plt.ylabel("Depth, $x$ (cm)")
             ax.xaxis.set_label_position("top")
 
-            temp_lim = [250, 720]
-            depth_lim = [-0.2, 2.2]
-            box_width_lim = [280, 700]
-            ax.spines["left"].set_bounds(0, 2.2)
-            ax.spines["top"].set_bounds(280, 720)
+            temp_diff = self.Ts - self.T0
+            temp_s1 = self.T0 - 0.1 * temp_diff
+            temp_s2 = self.Ts + 0.1 * temp_diff
+            temp_l1 = self.T0 - 0.2 * temp_diff
+            temp_l2 = self.Ts + 0.2 * temp_diff
+            l_s1 = 0
+            l_l1 = -1.1 * self.L
+            l_l2 = 1.1 * self.L
+            temp_lim = [temp_l1, temp_l2]
+            depth_lim = [l_l1, l_l2]
+            box_width_lim = [temp_s1, temp_s2]
+            ax.spines["left"].set_bounds(l_s1, l_l2)
+            ax.spines["top"].set_bounds(temp_s1, temp_l2)
 
             color_list = ["gray", "g", "dodgerblue", "paleturquoise"]
             lb_list = ["Solid", "S-L Mixture", "Liquid", "Gas"]
