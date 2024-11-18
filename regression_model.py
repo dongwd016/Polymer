@@ -60,7 +60,8 @@ def advance_rk4(dy_dt, t, y, dt):
 
 class Regression:
     def __init__(self):
-        self.save_list = ['T0', 'q0', 'k_s', 'k_l', 'rho_s', 'rho_l', 'MW0', 'cv', 'cp', 'A_beta', 'Ea', 'dH', 'MW', 'gamma', 'lh', 'T_melt', 'L', 't_end', 'x_num', 't_num',
+        self.save_list = ['folder', 'T0', 'q0', 'k_s', 'k_l', 'rho_s', 'rho_l', 'MW0', 'cv', 'cp', 'A_beta', 'Ea', 'dH', 'MW', 'gamma', 'lh', 'T_melt', 'L', 't_end', 'x_num',
+                          't_num',
                           't_store', 'dt', 'dx', 'cfl', 'Ts', 'Lm', 'rb']
         self.result_list = ['x_arr', 't_arr', 't_arg_arr', 't_store_arr', 'T_mat', 'phase_mat']
 
