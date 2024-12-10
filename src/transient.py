@@ -2,8 +2,25 @@ import os
 import json
 
 import numpy as np
+import scipy
 from scipy import constants as cst
-from tqdm import tqdm
+from tqdm.auto import tqdm
+import matplotlib.pyplot as plt
+import matplotlib.animation
+
+plt.style.use("default")
+plt.rc("figure", figsize=[5, 5])
+plt.rc("font", size=14, family="Arial")
+plt.rc("axes", labelsize=14, titlesize=14)
+plt.rc("legend", fontsize=12)
+plt.rc("xtick", labelsize=11)
+plt.rc("ytick", labelsize=11)
+plt.rc("lines", linewidth=2)
+plt.rcParams["animation.html"] = "jshtml"
+plt.rcParams["animation.ffmpeg_path"] = "C:/Program Files/ffmpeg/bin/ffmpeg.exe"
+plt.rcParams["animation.embed_limit"] = 50
+mu_sb = "\u03bc"
+deg_sb = "\u00b0"
 
 root_dir = "D:/DocumentAll/Research"
 work_dir = "{}/2-Polymer".format(root_dir)
@@ -282,6 +299,127 @@ class Transient:
 
         self.save_result()
 
+    def plot_box(self):
+        fig, ax = plt.subplots()
+
+        def animate(ti):
+            plt.cla()
+            x = self.x_arr * 100
+            ax = plt.gca()
+
+            plt.plot(1, 1, ">k", transform=ax.transAxes, clip_on=False)
+            plt.plot(0, 0, "vk", transform=ax.transAxes, clip_on=False)
+            plt.tick_params(top=True, labeltop=True, bottom=False, labelbottom=False)
+            ax.spines[["bottom", "right"]].set_visible(False)
+
+            plt.xlabel("Temperature, $T$ (K)")
+            plt.ylabel("Depth, $x$ (cm)")
+            ax.xaxis.set_label_position("top")
+
+            temp_diff = self.Ts - self.T0
+            temp_s1 = self.T0 - 0.1 * temp_diff
+            temp_s2 = self.Ts + 0.1 * temp_diff
+            temp_l1 = self.T0 - 0.2 * temp_diff
+            temp_l2 = self.Ts + 0.2 * temp_diff
+            l_s1 = 0
+            l_l1 = -1.1 * self.L
+            l_l2 = 1.1 * self.L
+            temp_lim = [temp_l1, temp_l2]
+            depth_lim = [l_l1, l_l2]
+            box_width_lim = [temp_s1, temp_s2]
+            ax.spines["left"].set_bounds(l_s1, l_l2)
+            ax.spines["top"].set_bounds(temp_s1, temp_l2)
+
+            color_list = ["gray", "g", "dodgerblue", "paleturquoise"]
+            lb_list = ["Solid", "S-L Mixture", "Liquid", "Gas"]
+            for ind, (color, lb) in enumerate(zip(color_list, lb_list)):
+                pos = np.where(self.phase_mat[ti, :] == ind)[0]
+                if len(pos) != 0:
+                    plt.fill_between(box_width_lim, x[np.max(pos)], x[np.min(pos)], color=color, label=lb)
+                else:
+                    plt.fill_between([], [], [], color=color, label=lb)
+            plt.plot(self.T_mat[ti, :], x, color="darkred", label="Temperature")
+            plt.xlim(temp_lim)
+            plt.ylim(depth_lim)
+            ax.invert_yaxis()
+            plt.text(0.3, 0.01, "{:.1f} s".format(self.t_store_arr[ti]), transform=ax.transAxes, color="k")
+            plt.legend(loc="lower right")
+
+            plt.tight_layout()
+
+        ani = matplotlib.animation.FuncAnimation(fig, animate, frames=range(0, self.phase_mat.shape[0], 10))
+        writer = matplotlib.animation.FFMpegWriter(fps=100)
+        ani.save("{}/Box.mp4".format(self.folder), writer=writer)
+
+    def cal_steady_state(self):
+        c1 = 2 * self.dH * self.rho_l * self.A_beta * cst.gas_constant * self.gamma / (self.MW * self.k_l * self.Ea)
+        c3 = cst.gas_constant * self.T_melt / self.Ea
+        c4 = 1 + self.dH / (self.MW0 * self.lh)
+
+        g = lambda u: scipy.special.expi(-1 / u) + u * np.exp(-1 / u)
+        gc2 = (self.q0 * cst.gas_constant / (self.k_l * self.Ea)) ** 2 * (1 - 1 / c4 ** 2) / (2 * c1) + g(c3)
+        c2 = 1.0
+        for _ in range(100):
+            c2 = c2 - (g(c2) - gc2) / np.exp(-1 / c2)
+        self.Ts = c2 * self.Ea / cst.gas_constant
+
+        b0 = (g(c2) - c4 ** 2 * g(c3)) / (c4 ** 2 - 1)
+        h = lambda y: 1 / np.sqrt(g(y) + b0)
+        self.Lm = 1 / np.sqrt(2 * c1) * scipy.integrate.quad(h, c3, c2)[0]
+
+        self.rb = self.k_l * self.Ea / (self.lh * self.rho_l * cst.gas_constant) * np.sqrt(2 * c1 * (g(c2) - g(c3)) / (c4 ** 2 - 1))
+
+    def plot_properties(self):
+        bi_arr = []
+        for ti in tqdm(range(self.phase_mat.shape[0])):
+            for xi in range(self.x_num):
+                if self.phase_mat[ti, xi] != 3:
+                    bi_arr.append(xi)
+                    break
+        bi_arr = np.array(bi_arr)
+        Ts_arr = []
+        for ti, bi in enumerate(tqdm(bi_arr)):
+            Ts_arr.append(self.T_mat[ti, bi])
+        Ts_arr = np.array(Ts_arr)
+        plt.figure()
+        plt.plot(self.t_store_arr, Ts_arr, color="k", label="Numerical transient")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Surface temperature (K)")
+        xlim = plt.gca().get_xlim()
+        plt.plot(xlim, self.Ts * np.ones(2), color="red", ls="--", label="Theoretical steady-state")
+        plt.xlim(xlim)
+        plt.legend(loc="lower right")
+        plt.title("(a) Surface temperature")
+        plt.savefig("{}/Surface_Temperature.png".format(self.folder), bbox_inches="tight")
+
+        thick_arr = []
+        for ti in tqdm(range(self.phase_mat.shape[0])):
+            thick_arr.append(len(np.where(self.phase_mat[ti, :] == 2)[0]) * self.dx)
+        thick_arr = np.array(thick_arr)
+        plt.figure()
+        plt.plot(self.t_store_arr, thick_arr * 100, color="k", label="Numerical transient")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Molten layer thickness (cm)")
+        xlim = plt.gca().get_xlim()
+        plt.plot(xlim, self.Lm * 100 * np.ones(2), color="red", ls="--", label="Theoretical steady-state")
+        plt.xlim(xlim)
+        plt.legend(loc="lower right")
+        plt.title("(b) Molten layer thickness")
+        plt.savefig("{}/Thickness.png".format(self.folder), bbox_inches="tight")
+
+        plt.figure()
+        y = self.x_arr[bi_arr] * 100
+        plt.plot(self.t_store_arr, y, color="k")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Surface position (cm)")
+        arg = np.where((self.t_store_arr > 0.8 * self.t_end) & (self.t_store_arr < self.t_end))[0]
+        m, b = np.polyfit(self.t_store_arr[arg], y[arg], deg=1)
+        plt.plot(self.t_arr, m * self.t_arr + b, color="r", lw=1)
+        plt.text(0.4, 0.3, "$y$ = {:.4f} $x$ + {:.4f}".format(m, b), transform=plt.gca().transAxes)
+        plt.text(0.05, 0.85, r"Numerical slope = {:.1f} {}m/s".format(m * 1e4, mu_sb), transform=plt.gca().transAxes)
+        plt.text(0.05, 0.78, r"Theoretial $r_b$ = {:.1f} {}m/s".format(self.rb * 1e6, mu_sb), transform=plt.gca().transAxes)
+        plt.title("(c) Surface regression")
+        plt.savefig("{}/Regression_Rate.png".format(self.folder), bbox_inches="tight")
 
 def anchor_point():
     pass
