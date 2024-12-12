@@ -58,13 +58,16 @@ def advance_rk4(dy_dt, t, y, dt):
     return y + k
 
 
-class Transient:
+class Polymer:
     def __init__(self):
         self.save_list = ['folder', 'T0', 'q0', 'qb', 'k_s', 'k_l', 'rho_s', 'rho_l', 'MW0', 'cv', 'cp', 'A_beta', 'Ea', 'dH', 'MW', 'gamma', 'lh', 'T_melt', 'slope_Tb', 'L',
-                          't_end', 'x_num', 't_num', 't_store', 'dt', 'dx', 'cfl']
-        self.result_list = ['x_arr', 't_arr', 't_arg_arr', 't_store_arr', 'T_mat', 'phase_mat', 'dL_arr']
+                          't_end', 'x_num', 't_num', 't_store', 'dt', 'dx', 'cfl', 'db_path', 'sp_name_list', 'sp_num', 'x_reaction', 'm_polymer_init', 'S', 'P', 'lumped_A',
+                          'lumped_Ea', 't_end', 't_num', 'temp_control', 'n_threshold']
+        self.result_list = ['x_arr', 't_arr', 't_arg_arr', 't_store_arr', 'T_mat', 'phase_mat', 'dL_arr', 'n_mat', 'm_polymer_arr', 'D_mat', 'C_mat', 't_arr', 'temp_arr']
 
         self.folder = None
+
+        # Transient related (non-uniform temperature)
         self.T0 = None  # K
         self.q0 = None  # W/m2, heat flux from gas phase
         self.qb = None  # W/m2, heat flux from the bottom
@@ -100,6 +103,39 @@ class Transient:
         self.T_mat = None
         self.phase_mat = None
         self.dL_arr = None
+
+        # Evaporation related
+        self.db_path = None
+        self.sp_name_list = None  # [K,], decomposition product name list
+        self.sp_num = None  # number of decomposition products
+        self.x_reaction = None  # [K,], function of temperature, polymer decomposition product mole fraction array directly from reaction
+        self.m_polymer_init = None  # kg, initial mass of polymer
+        self.S = None  # m2, surface area
+        self.P = None  # Pa, ambient pressure
+        self.lumped_A = None  # 1/s, lumped pre-exponential factor for polymer decomposition
+        self.lumped_Ea = None  # J/mol, lumped activation energy for polymer decomposition
+        self.t_end = None  # s, simulation time
+        self.t_num = None  # number of sample time
+        self.temp_control = None  # K, function of time, controlled temperature profile
+        self.n_threshold = None  # n smaller than this will be considered as 0
+
+        self.n_mat = None  # mol [N,K], time history of number of mole array of liquid phase decomposition products
+        self.n_arr = None  # mol [K,], current number of mole array of liquid phase decomposition products
+        self.m_polymer_arr = None  # kg [K,], polymer mass time history
+        self.m_polymer = None  # kg, remaining polymer mass
+        self.D_mat = None  # mol/s [N,K], time history of evaporation rate of each product
+        self.D_arr = None  # mol/s [K,], evaporation rate of each product
+        self.C_mat = None  # mol [N,K], time history of C_arr
+        self.C_arr = None  # mol [K,], number of mole of each product being collected in the gas phase cumulatively
+        self.t_arr = None  # s [K,], result time array
+        self.t = None  # s, current time
+        self.temp_arr = None  # K [K,], temperature time history
+        self.temp = None  # K, current temperature
+
+        self.db = None  # database recording species properties
+        self.df_dict = None  # df_dict generated from db
+        self.MW_arr = None  # kg/mol [K,] molecular weight array of each product
+        self.P_sat = None  # Pa, [K,] vapor pressure array of each product
 
     def save_case_dict(self):
         case_dict = {}
@@ -427,33 +463,8 @@ def anchor_point():
 
 
 if __name__ == '__main__':
-    # tt = Transient()
-    # tt.folder = "{}/output/model_V1/Case12".format(work_dir)
-    # tt.T0 = 300  # K
-    # tt.q0 = 1e5  # W/m2, heat flux from gas phase
-    # tt.k_s = 0.33  # W/m·K, solid phase thermal conductivity
-    # tt.k_l = 0.14  # W/m·K, liquid phase thermal conductivity
-    # tt.rho_s = 1.42e3  # kg/m3, solid phase density
-    # tt.rho_l = 1.2e3  # kg/m3, liquid phase density
-    # tt.MW0 = 30e-3  # kg/mol, CH2O molecular weight
-    # tt.cv = 35 / tt.MW0  # J/kg·K
-    # tt.cp = tt.cv
-    # tt.A_beta = 1.8e13  # 1/s
-    # tt.Ea = 30 * cst.calorie * 1e3  # J/mol
-    # tt.dH = 56e3  # J/mol, heat absorbed by beta scission
-    # tt.MW = 1e2  # kg/mol, molecular weight of POM
-    # tt.gamma = 1
-    # tt.lh = 150e3  # J/kg, latent heat of POM melting
-    # tt.T_melt = 165 + 273  # K, POM melting point
-    # tt.L = 0.02  # m
-    # tt.t_end = 100  # s
-    # tt.x_num = 500 + 1
-    # tt.t_num = 1000000 + 1
-    # tt.t_store = 100
-    # tt.main()
-
-    tt = Transient()
-    tt.folder = "{}/output/TGA/Case13".format(work_dir)
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case1".format(work_dir)
     tt.T0 = 438  # K
     tt.slope_Tb = 30 / 60  # K/s
     tt.q0 = 3e3  # W/m2
