@@ -2,9 +2,11 @@ import os
 import json
 
 import numpy as np
+import pandas as pd
 import scipy
 from scipy import constants as cst
 from tqdm.auto import tqdm
+from tqdm.contrib import tzip
 import matplotlib.pyplot as plt
 import matplotlib.animation
 
@@ -61,13 +63,13 @@ def advance_rk4(dy_dt, t, y, dt):
 class Polymer:
     def __init__(self):
         self.save_list = ['folder', 'T0', 'q0', 'qb', 'k_s', 'k_l', 'rho_s', 'rho_l', 'MW0', 'cv', 'cp', 'A_beta', 'Ea', 'dH', 'MW', 'gamma', 'lh', 'T_melt', 'slope_Tb', 'L',
-                          't_end', 'x_num', 't_num', 't_store', 'dt', 'dx', 'cfl', 'db_path', 'sp_name_list', 'sp_num', 'x_reaction', 'm_polymer_init', 'S', 'P', 'lumped_A',
-                          'lumped_Ea', 't_end', 't_num', 'temp_control', 'n_threshold']
-        self.result_list = ['x_arr', 't_arr', 't_arg_arr', 't_store_arr', 'T_mat', 'phase_mat', 'dL_arr', 'n_mat', 'm_polymer_arr', 'D_mat', 'C_mat', 't_arr', 'temp_arr']
+                          't_end', 'Nx', 't_num', 't_store', 'Nt', 'dt', 'dx', 'cfl', 'db_path', 'sp_name_list', 'Ns', 'x_reaction', 'm_polymer_init', 'eta', 'S', 'P', 'lumped_A',
+                          'lumped_Ea', 't_end', 't_num', 'temp_control', 'n_threshold', 'diffusion_coefficient', 'N']
+        self.result_list = ['x_arr', 't_arr', 't_arg_arr', 't_store_arr', 'T_mat', 'phase_mat', 'dL_arr', 'fp_mat', 'f_ten']
 
         self.folder = None
 
-        # Transient related (non-uniform temperature)
+        # Transient related (heat transfer, non-uniform temperature)
         self.T0 = None  # K
         self.q0 = None  # W/m2, heat flux from gas phase
         self.qb = None  # W/m2, heat flux from the bottom
@@ -86,31 +88,30 @@ class Polymer:
         self.lh = None  # J/kg, latent heat of POM melting
         self.T_melt = None  # K, POM melting point
         self.slope_Tb = None  # K/s, heating rate
+        self.N = None  # polymer polymerization degree, MW/MW0
 
         self.L = None  # m
         self.t_end = None  # s
-        self.x_num = None
+        self.Nx = None
         self.t_num = None
         self.t_store = None
         self.x_arr = None
         self.t_arr = None
         self.t_arg_arr = None
         self.t_store_arr = None
+        self.Nt = None
         self.dt = None
         self.dx = None
         self.cfl = None  # pseudo CFL number, alpha * dt / dx ** 2
 
-        self.T_mat = None
-        self.phase_mat = None
-        self.dL_arr = None
-
         # Evaporation related
         self.db_path = None
-        self.sp_name_list = None  # [K,], decomposition product name list
-        self.sp_num = None  # number of decomposition products
-        self.x_reaction = None  # [K,], function of temperature, polymer decomposition product mole fraction array directly from reaction
+        self.sp_name_list = None  # [Ns,], decomposition product name list
+        self.Ns = None  # number of decomposition products
+        self.x_reaction = None  # [Ns,], function of temperature, polymer decomposition product mole fraction array directly from reaction
         self.m_polymer_init = None  # kg, initial mass of polymer
-        self.S = None  # m2, surface area
+        self.eta = None  # m2/kg, effective surface area coefficient
+        self.S = None  # m2, effective surface area
         self.P = None  # Pa, ambient pressure
         self.lumped_A = None  # 1/s, lumped pre-exponential factor for polymer decomposition
         self.lumped_Ea = None  # J/mol, lumped activation energy for polymer decomposition
@@ -118,24 +119,29 @@ class Polymer:
         self.t_num = None  # number of sample time
         self.temp_control = None  # K, function of time, controlled temperature profile
         self.n_threshold = None  # n smaller than this will be considered as 0
+        self.diffusion_coefficient = None
 
-        self.n_mat = None  # mol [N,K], time history of number of mole array of liquid phase decomposition products
-        self.n_arr = None  # mol [K,], current number of mole array of liquid phase decomposition products
-        self.m_polymer_arr = None  # kg [K,], polymer mass time history
-        self.m_polymer = None  # kg, remaining polymer mass
-        self.D_mat = None  # mol/s [N,K], time history of evaporation rate of each product
-        self.D_arr = None  # mol/s [K,], evaporation rate of each product
-        self.C_mat = None  # mol [N,K], time history of C_arr
-        self.C_arr = None  # mol [K,], number of mole of each product being collected in the gas phase cumulatively
-        self.t_arr = None  # s [K,], result time array
         self.t = None  # s, current time
-        self.temp_arr = None  # K [K,], temperature time history
-        self.temp = None  # K, current temperature
+        self.evaporation_rate = None  # mol/m3/s [Ns,], evaporation rate for each species at current time
+
+        self.T_mat = None  # K [Nt,Nx], temperature profile time history
+        self.T_arr = None  # K [Nx,], temperature profile at current time
+        self.phase_mat = None  # [Nt,Nx], phase profile time history
+        self.phase_arr = None  # [Nx,], phase profile at current time
+        self.dL_arr = None  # m [Nt,], regressed length time history
+        self.dL = None  # m, regressed length at current time
+        self.fp_mat = None  # mol/m3 [Nt,Nx], polymer concentration profile time history
+        self.fp_arr = None  # mol/m3 [Nx,], polymer concentration profile at current time
+        self.f_ten = None  # mol/m3 [Nt,Ns,Nx], products concentration profiles time history
+        self.f_mat = None  # mol/m3 [Ns,Nx], products concentration profiles at current time
 
         self.db = None  # database recording species properties
         self.df_dict = None  # df_dict generated from db
-        self.MW_arr = None  # kg/mol [K,] molecular weight array of each product
-        self.P_sat = None  # Pa, [K,] vapor pressure array of each product
+        self.MW_arr = None  # kg/mol [Ns,] molecular weight array of each product
+        self.D_arr = None  # m2/s [Ns,] molecular weight array of each product
+        self.Hvap_arr = None  # J/mol [Ns,] molecular weight array of each product
+        self.P_sat = None  # Pa, [Ns,] vapor pressure array of each product
+        self.Ei = None  # mol/m3/s, [Ns,Nx] evaporation rate of each product
 
     def save_case_dict(self):
         case_dict = {}
@@ -152,7 +158,16 @@ class Polymer:
         if not os.path.isdir(self.folder):
             os.makedirs(self.folder)
 
-        self.x_arr = np.linspace(0, self.L, self.x_num)
+        # Property calculation
+        self.S = self.eta * self.m_polymer_init
+        self.MW = self.N * self.MW0
+        if self.lumped_A is None:
+            self.lumped_A = self.A_beta * self.gamma
+        if self.lumped_Ea is None:
+            self.lumped_Ea = self.Ea
+
+        # Grid definition
+        self.x_arr = np.linspace(0, self.L, self.Nx)
         self.t_arr = np.linspace(0, self.t_end, self.t_num)
         self.t_arg_arr = np.arange(0, self.t_num, self.t_store, dtype=int)
         self.t_store_arr = self.t_arr[self.t_arg_arr]
@@ -161,177 +176,163 @@ class Polymer:
         self.cfl = self.k_l / (self.rho_l * self.cp) * self.dt / self.dx ** 2
         print('alpha * dt / dx^2 = {}'.format(self.cfl))
 
-        self.T_mat = np.empty(((self.t_num - 1) // self.t_store + 1, self.x_num))
-        self.phase_mat = np.empty(((self.t_num - 1) // self.t_store + 1, self.x_num))
-        self.dL_arr = np.empty((self.t_num - 1) // self.t_store + 1)
+        # decomposition product information loading
+        if self.db is None:
+            self.db = pd.read_excel(self.db_path)
+        self.df_dict = {df["Name"]: df for _, df in self.db.iterrows()}
+        self.MW_arr = np.array([self.df_dict[sp]['MW'] for sp in self.sp_name_list])
+        self.D_arr = np.array([self.df_dict[sp]['D'] for sp in self.sp_name_list])
+        self.Hvap_arr = np.array([self.df_dict[sp]['Hvap'] for sp in self.sp_name_list])
+        self.Ns = len(self.sp_name_list)
+
+        # stored variable setting
+        self.Nt = len(self.t_arg_arr)
+        # self.T_mat = np.full((self.Nt, self.Nx), np.nan)
+        # self.phase_mat = np.full((self.Nt, self.Nx), np.nan)
+        # self.dL_arr = np.full(self.Nt, np.nan)
+        # self.fp_mat = np.full((self.Nt, self.Nx), np.nan)
+        # self.f_ten = np.full((self.Nt, self.Ns, self.Nx), np.nan)
+        self.T_mat = []
+        self.phase_mat = []
+        self.dL_arr = []
+        self.fp_mat = []
+        self.f_ten = []
+
+        self.T_arr = self.T0 * np.ones(self.Nx)
+        self.phase_arr = np.zeros(self.Nx)  # 0: solid; 1: s-l mixture; 2: liquid; 3: gas.
+        self.dL = 0
+        self.fp_arr = np.full(self.Nx, np.nan)
+        self.f_mat = np.full((self.Ns, self.Nx), np.nan)
+        self.record_state()
+
+        # state variable initialization
+        self.t = 0.0
+
+    def record_state(self):
+        self.T_mat.append(self.T_arr.copy())
+        self.phase_mat.append(self.phase_arr.copy())
+        self.dL_arr.append(self.dL)
+        self.fp_mat.append(self.fp_arr.copy())
+        self.f_ten.append(self.f_mat.copy())
+
+    def get_P_sat(self, T):
+        Ps = []
+        for sp_name in self.sp_name_list:
+            df = self.df_dict[sp_name]
+            dB = df["dB"]
+            Tb = df["bp"]
+            rhs = (4.1012 + dB) * (T / Tb - 1) / (T / Tb - 1 / 8)
+            Ps.append(10 ** rhs * cst.atm)
+        Ps = np.array(Ps)
+        return Ps
+
+    def get_evaporation_rate(self, T, f_prod, f_polymer):
+        total_f = np.sum(f_prod, axis=0) + f_polymer
+        x = np.zeros((self.Ns, self.Nx))
+        for i in range(self.Nx):
+            if total_f[i] > 0:
+                x[:, i] = f_prod[:, i] / total_f[i]
+        self.P_sat = self.get_P_sat(T)
+        return x * self.P_sat * self.eta * self.rho_l * np.sqrt(1 / (2 * np.pi * cst.gas_constant * T * self.MW_arr.reshape(-1, 1)))
 
     def main(self):
         self.initialize()
         self.save_case_dict()
 
-        T_old = self.T0 * np.ones(self.x_num)
-        T_old[0] = T_old[1] + self.q0 / self.k_s * self.dx
-        self.T_mat[0, :] = T_old
-
-        phase_arr = np.zeros(self.x_num)  # 0: solid; 1: s-l mixture; 2: liquid; 3: gas.
-        self.phase_mat[0, :] = phase_arr
-        bi = 0
         rho_dict = {0: self.rho_s, 1: 0.5 * (self.rho_s + self.rho_l), 2: self.rho_l, 3: np.nan}
         k_dict = {0: self.k_s, 1: 0.5 * (self.k_s + self.k_l), 2: self.k_l, 3: np.nan}
-        store_arr = np.zeros(self.x_num)  # energy in dT stored at phase change from solid to liquid
+        store_arr = np.zeros(self.Nx)  # energy in dT stored at phase change from solid to liquid
 
-        dL = 0
-        t_ind = 0
         for ti in tqdm(range(1, self.t_num), miniters=(self.t_num - 1) // 100):
-            for pi in range(bi, self.x_num):
-                if phase_arr[pi] != 3:
-                    bi = pi
-                    break
+            T_new = np.full(self.Nx, np.nan)
+            fp_new = np.full(self.Nx, np.nan)
+            f_new = np.full((self.Ns, self.Nx), np.nan)
+            fe_new = np.full((self.Ns + 1, self.Nx), np.nan)
 
-            rho_arr = np.array([rho_dict[p] for p in phase_arr])
-            k_arr = np.array([k_dict[p] for p in phase_arr])
+            rho_arr = np.array([rho_dict[p] for p in self.phase_arr])
+            k_arr = np.array([k_dict[p] for p in self.phase_arr])
 
-            liq_arg = np.where(phase_arr[bi + 1: -1] == 2)[0]
+            liquid_ind = np.where(self.phase_arr == 2)[0]
+            not_gas_ind = np.where(self.phase_arr != 3)[0]
+            if len(not_gas_ind) == 0:
+                print('All gas!')
+                break
+            boundary_ind = not_gas_ind[0]
 
-            def k_rxn(T):
-                tmp_arr = np.zeros_like(T)
-                tmp_arr[liq_arg] = self.A_beta * np.exp(-self.Ea / (cst.gas_constant * T[liq_arg]))
-                return tmp_arr
+            self.Ei = np.zeros((self.Ns, len(liquid_ind[1:-1])))
+            if len(liquid_ind) > 3:
+                for ind in liquid_ind:
+                    if np.isnan(self.fp_arr[ind]):
+                        self.fp_arr[ind] = rho_arr[ind] / self.MW
+                        self.f_mat[:, ind] = 0
+                inner_ind = liquid_ind[1:-1]
 
-            Q_rxn = lambda T: self.dH * 2 * rho_arr[bi + 1: -1] / self.MW * k_rxn(T) * self.gamma
-            dL += np.sum(2 * k_rxn(T_old[bi + 1: -1]) * self.gamma * self.MW0 / self.MW * self.dt * self.dx)
+                def fe_rate(t, fe_in):
+                    fe_top = np.concatenate([[self.fp_arr[liquid_ind[0]]], self.f_mat[:, liquid_ind[0]]])
+                    fe_bottom = np.concatenate([[self.fp_arr[liquid_ind[-1]]], self.f_mat[:, liquid_ind[-1]]])
+                    used_fe = np.hstack([fe_top.reshape(-1, 1), fe_in, fe_bottom.reshape(-1, 1)])
+
+                    kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * self.T_arr[inner_ind]))
+                    rxn_rate = kr * fe_in[0, :] * 2 / self.N
+                    alpha_i = self.x_reaction(self.T_arr[inner_ind])
+                    beta_i = self.N * alpha_i / np.sum([(i + 1) * alpha_i[i, :] for i in range(alpha_i.shape[0])])
+                    self.Ei = self.get_evaporation_rate(self.T_arr[inner_ind], fe_in[1:, :], fe_in[0, :])
+                    source_i = beta_i.reshape(-1, 1) * rxn_rate - self.Ei
+                    source = np.vstack([-rxn_rate.reshape(1, -1), source_i])
+                    tmp_arr = self.D_arr.reshape(-1, 1) / self.dx ** 2 * (used_fe[:, 2:] - 2 * fe_in + used_fe[:, -2]) + source
+                    return tmp_arr
+
+                fe_mat = np.vstack([self.fp_arr.reshape(1, -1), self.f_mat])
+                fe_new[:, inner_ind] = advance_rk4(fe_rate, ti * self.dt, fe_mat[inner_ind], self.dt)
+                fe_new[:, liquid_ind[0]] = fe_mat[:, liquid_ind[0]]
+                fe_new[:, liquid_ind[-1]] = fe_mat[:, liquid_ind[-1]]
+                fp_new = fe_new[0, :]
+                f_new = fe_new[1:, :]
+
+                self.Ei = self.get_evaporation_rate(self.T_arr[inner_ind], self.f_mat[:, inner_ind], self.fp_arr[inner_ind])
+                self.dL += np.sum(self.Ei * self.dt * self.MW_arr.reshape(-1, 1) / self.rho_l * self.dx)
+
+            inner_ind = not_gas_ind[1:-1]
 
             def T_rate(t, T_in):
-                used_T = np.concatenate([[T_old[bi]], T_in, [self.T0]])
-                tmp_arr = (k_arr[bi + 1: -1] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn(T_in)) / (rho_arr[bi + 1: -1] * self.cp)
-                return tmp_arr
+                used_T = np.concatenate([[self.T_arr[boundary_ind]], T_in, [self.T_arr[-1]]])
+                kr = np.zeros(len(inner_ind))
+                kr[:self.Ei.shape[1]] = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * T_in[:self.Ei.shape[1]]))
+                Q_rxn = self.dH * 2 * rho_arr[inner_ind] / self.MW * kr
+                evap_heat = np.zeros(len(inner_ind))
+                evap_heat[:self.Ei.shape[1]] = np.sum(self.Ei * self.Hvap_arr.reshape(-1, 1), axis=0)
+                return (k_arr[inner_ind] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn - evap_heat) / (rho_arr[inner_ind] * self.cp)
 
-            T_new = np.empty(self.x_num)
-            T_new.fill(np.nan)
-            T_new[-1] = self.T0
-            T_new[bi + 1: -1] = advance_rk4(T_rate, ti * self.dt, T_old[bi + 1: -1], self.dt)
+            T_new[inner_ind] = advance_rk4(T_rate, ti * self.dt, self.T_arr[inner_ind], self.dt)
+            T_new[-1] = T_new[-2]
 
-            phase_change_arg = np.where(np.isin(phase_arr, [0, 1]) & (T_new > self.T_melt))[0]
-            phase_arr[phase_change_arg] = 1
+            phase_change_arg = np.where(np.isin(self.phase_arr, [0, 1]) & (T_new > self.T_melt))[0]
+            self.phase_arr[phase_change_arg] = 1
             extra_T_arr = T_new[phase_change_arg] - self.T_melt
             T_new[phase_change_arg] = self.T_melt
             store_arr[phase_change_arg] += extra_T_arr
 
             lh_T = self.lh / self.cp
             over_arg = np.intersect1d(np.where(store_arr >= lh_T)[0], phase_change_arg)
-            phase_arr[over_arg] = 2
+            self.phase_arr[over_arg] = 2
             T_new[over_arg] = self.T_melt + (store_arr[over_arg] - lh_T)
 
-            T_new[bi] = T_new[bi + 1] + self.q0 / k_arr[bi] * self.dx
-            if phase_arr[bi] in [0, 1] and T_new[bi] > self.T_melt:
-                phase_arr[bi] = 1
-                extra_T = T_new[bi] - self.T_melt
-                T_new[bi] = self.T_melt
-                store_arr[bi] += extra_T
-                if store_arr[bi] >= lh_T:
-                    phase_arr[bi] = 2
-                    T_new[bi] = self.T_melt + (store_arr[bi] - lh_T)
+            T_new[boundary_ind] = T_new[boundary_ind + 1] + self.q0 / k_arr[boundary_ind] * self.dx
+            if self.phase_arr[boundary_ind] in [0, 1] and T_new[boundary_ind] > self.T_melt:
+                self.phase_arr[boundary_ind] = 1
+                extra_T = T_new[boundary_ind] - self.T_melt
+                T_new[boundary_ind] = self.T_melt
+                store_arr[boundary_ind] += extra_T
+                if store_arr[boundary_ind] >= lh_T:
+                    self.phase_arr[boundary_ind] = 2
+                    T_new[boundary_ind] = self.T_melt + (store_arr[boundary_ind] - lh_T)
 
-            phase_arr[bi: int(np.round(dL / self.dx))] = 3
-
+            self.phase_arr[boundary_ind: int(np.round(self.dL / self.dx))] = 3
+            self.T_arr = T_new.copy()
+            self.fp_arr = fp_new.copy()
+            self.f_mat = f_new.copy()
             if ti in self.t_arg_arr:
-                t_ind += 1
-                self.phase_mat[t_ind, :] = phase_arr
-                self.T_mat[t_ind, :] = T_new
-                self.dL_arr[t_ind] = dL
-            T_old = T_new
-
-        self.save_result()
-
-    def main_TGA(self):
-        self.initialize()
-        self.save_case_dict()
-
-        T_old = self.T0 * np.ones(self.x_num)
-        T_old[0] = T_old[1] + self.q0 / self.k_l * self.dx
-        self.T_mat[0, :] = T_old
-
-        bi = 0
-        dL = 0
-        t_ind = 0
-        for ti in tqdm(range(1, self.t_num)):
-            rho_arr = self.rho_l * np.ones(self.x_num)
-            k_arr = self.k_l * np.ones(self.x_num)
-
-            def k_rxn(T):
-                return self.A_beta * np.exp(-self.Ea / (cst.gas_constant * T))
-
-            Q_rxn = lambda T: self.dH * 2 * rho_arr[bi + 1: -1] / self.MW * k_rxn(T) * self.gamma
-            dL += np.sum(2 * k_rxn(T_old[bi:]) * self.gamma * self.MW0 / self.MW * self.dt * self.dx)
-
-            def T_rate(t, T_in):
-                used_T = np.concatenate([[T_old[bi]], T_in, [T_old[-1]]])
-                tmp_arr = (k_arr[bi + 1: -1] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn(T_in)) / (rho_arr[bi + 1: -1] * self.cp)
-                return tmp_arr
-
-            T_new = np.empty(self.x_num)
-            T_new.fill(np.nan)
-            T_new[-1] = self.T0 + self.slope_Tb * ti * self.dt
-            T_new[bi + 1: -1] = advance_rk4(T_rate, ti * self.dt, T_old[bi + 1: -1], self.dt)
-            T_new[bi] = T_new[bi + 1] + self.q0 / k_arr[bi] * self.dx
-
-            if ti in self.t_arg_arr:
-                t_ind += 1
-                self.T_mat[t_ind, :] = T_new
-                self.dL_arr[t_ind] = dL
-            T_old = T_new
-
-            bi = int(np.round(dL / self.dx))
-            if bi >= self.x_num - 1:
-                self.T_mat = self.T_mat[: t_ind + 1, :]
-                self.dL_arr = self.dL_arr[: t_ind + 1]
-                break
-
-        self.save_result()
-
-    def main_TGA_top_heat(self):
-        self.initialize()
-        self.save_case_dict()
-
-        T_old = self.T0 * np.ones(self.x_num)
-        T_old[0] = T_old[1] + self.q0 / self.k_l * self.dx
-        self.T_mat[0, :] = T_old
-
-        bi = 0
-        dL = 0
-        t_ind = 0
-        for ti in tqdm(range(1, self.t_num)):
-            rho_arr = self.rho_l * np.ones(self.x_num)
-            k_arr = self.k_l * np.ones(self.x_num)
-
-            def k_rxn(T):
-                return self.A_beta * np.exp(-self.Ea / (cst.gas_constant * T))
-
-            Q_rxn = lambda T: self.dH * 2 * rho_arr[bi + 1: -1] / self.MW * k_rxn(T) * self.gamma
-            dL += np.sum(2 * k_rxn(T_old[bi:]) * self.gamma * self.MW0 / self.MW * self.dt * self.dx)
-
-            def T_rate(t, T_in):
-                used_T = np.concatenate([[T_old[bi]], T_in, [T_old[-1]]])
-                tmp_arr = (k_arr[bi + 1: -1] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn(T_in)) / (rho_arr[bi + 1: -1] * self.cp)
-                return tmp_arr
-
-            T_new = np.empty(self.x_num)
-            T_new.fill(np.nan)
-            T_new[bi] = T_old[bi + 1] + self.q0 / k_arr[bi] * self.dx
-            T_new[bi + 1: -1] = advance_rk4(T_rate, ti * self.dt, T_old[bi + 1: -1], self.dt)
-            T_new[-1] = T_new[-2]
-
-            if ti in self.t_arg_arr:
-                t_ind += 1
-                self.T_mat[t_ind, :] = T_new
-                self.dL_arr[t_ind] = dL
-            T_old = T_new
-
-            bi = int(np.round(dL / self.dx))
-            if bi >= self.x_num - 1:
-                self.T_mat = self.T_mat[: t_ind + 1, :]
-                self.dL_arr = self.dL_arr[: t_ind + 1]
-                break
+                self.record_state()
 
         self.save_result()
 
@@ -465,25 +466,31 @@ def anchor_point():
 if __name__ == '__main__':
     tt = Polymer()
     tt.folder = "{}/output/integrated/Case1".format(work_dir)
-    tt.T0 = 438  # K
-    tt.slope_Tb = 30 / 60  # K/s
-    tt.q0 = 3e3  # W/m2
-    tt.qb = 0  # W/m2
+    tt.db_path = '{}/data/polymer_evaporation.xlsx'.format(work_dir)
+    tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer", "Styrene 4-mer", "Styrene 5-mer"]
+    tt.x_reaction = lambda temp: np.array([8, 4, 2, 1, 1], dtype=float)
+    tt.T0 = 300  # K, initial temperature
+    tt.T_melt = 165 + 273  # K, melting temperature
+    tt.m_polymer_init = 10e-3  # kg, initial mass of polymer
+    tt.eta = 7.4e-6  # m2/kg, effective surface area coefficient
+    tt.lumped_A = 2e11  # 1/s, lumped pre-exponential factor for polymer decomposition
+    tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
+    tt.q0 = 1e5  # W/m2, heat flux from gas phase
+    tt.k_s = 0.33  # W/m·K, solid phase thermal conductivity
     tt.k_l = 0.14  # W/m·K, liquid phase thermal conductivity
+    tt.rho_s = 1.42e3  # kg/m3, solid phase density
     tt.rho_l = 1.2e3  # kg/m3, liquid phase density
     tt.MW0 = 30e-3  # kg/mol, CH2O molecular weight
     tt.cv = 35 / tt.MW0  # J/kg·K
     tt.cp = tt.cv
-    tt.A_beta = 1.8e13  # 1/s
-    tt.Ea = 31.8 * cst.calorie * 1e3  # J/mol
     tt.dH = 56e3  # J/mol, heat absorbed by beta scission
-    tt.MW = 1e2  # kg/mol, molecular weight of POM
-    tt.gamma = 1
-    tt.L = 1e-3  # m
+    tt.lh = 150e3  # J/kg, latent heat of fuel melting
+    tt.N = 3000  # number of polymer degree
+    tt.L = 1e-2  # m
     tt.t_end = 800  # s
-    tt.x_num = 50 + 1
-    tt.t_num = 1000000 + 1
+    tt.Nx = 50 + 1
+    tt.t_num = 100000 + 1
     tt.t_store = 100
-    tt.main_TGA_top_heat()
+    tt.main()
 
     pass
