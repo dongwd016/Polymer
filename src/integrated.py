@@ -64,7 +64,7 @@ class Polymer:
     def __init__(self):
         self.save_list = ['folder', 'T0', 'q0', 'qb', 'k_s', 'k_l', 'rho_s', 'rho_l', 'MW0', 'cv', 'cp', 'A_beta', 'Ea', 'dH', 'MW', 'gamma', 'lh', 'T_melt', 'slope_Tb', 'L',
                           't_end', 'Nx', 't_num', 't_store', 'Nt', 'dt', 'dx', 'cfl', 'db_path', 'sp_name_list', 'Ns', 'x_reaction', 'm_polymer_init', 'eta', 'S', 'P', 'lumped_A',
-                          'lumped_Ea', 't_end', 't_num', 'temp_control', 'n_threshold', 'diffusion_coefficient', 'N']
+                          'lumped_Ea', 't_end', 't_num', 'temp_control', 'n_threshold', 'diffusion_coefficient', 'N', 'D']
         self.result_list = ['x_arr', 't_arr', 't_arg_arr', 't_store_arr', 'T_mat', 'phase_mat', 'dL_arr', 'fp_mat', 'f_ten']
 
         self.folder = None
@@ -89,6 +89,7 @@ class Polymer:
         self.T_melt = None  # K, POM melting point
         self.slope_Tb = None  # K/s, heating rate
         self.N = None  # polymer polymerization degree, MW/MW0
+        self.D = None  # m2/s, polymer diffusion coefficient
 
         self.L = None  # m
         self.t_end = None  # s
@@ -139,7 +140,7 @@ class Polymer:
         self.df_dict = None  # df_dict generated from db
         self.MW_arr = None  # kg/mol [Ns,] molecular weight array of each product
         self.D_arr = None  # m2/s [Ns,] molecular weight array of each product
-        self.Hvap_arr = None  # J/mol [Ns,] molecular weight array of each product
+        self.H_vap = None  # J/mol [Ns,] molecular weight array of each product
         self.P_sat = None  # Pa, [Ns,] vapor pressure array of each product
         self.Ei = None  # mol/m3/s, [Ns,Nx] evaporation rate of each product
 
@@ -182,7 +183,6 @@ class Polymer:
         self.df_dict = {df["Name"]: df for _, df in self.db.iterrows()}
         self.MW_arr = np.array([self.df_dict[sp]['MW'] for sp in self.sp_name_list])
         self.D_arr = np.array([self.df_dict[sp]['D'] for sp in self.sp_name_list])
-        self.Hvap_arr = np.array([self.df_dict[sp]['Hvap'] for sp in self.sp_name_list])
         self.Ns = len(self.sp_name_list)
 
         # stored variable setting
@@ -226,10 +226,21 @@ class Polymer:
         Ps = np.array(Ps)
         return Ps
 
+    def get_H_vap(self, T):
+        H_vap = []
+        for sp_name in self.sp_name_list:
+            df = self.df_dict[sp_name]
+            dB = df["dB"]
+            Tb = df["bp"]
+            drhs_dt = 56 * (4.1012 + dB) * Tb / (8 * T - Tb) ** 2
+            H_vap.append(np.log(10) * drhs_dt * cst.gas_constant * T ** 2)
+        H_vap = np.array(H_vap)
+        return H_vap
+
     def get_evaporation_rate(self, T, f_prod, f_polymer):
         total_f = np.sum(f_prod, axis=0) + f_polymer
-        x = np.zeros((self.Ns, self.Nx))
-        for i in range(self.Nx):
+        x = np.zeros((self.Ns, len(T)))
+        for i in range(len(T)):
             if total_f[i] > 0:
                 x[:, i] = f_prod[:, i] / total_f[i]
         self.P_sat = self.get_P_sat(T)
@@ -274,16 +285,17 @@ class Polymer:
 
                     kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * self.T_arr[inner_ind]))
                     rxn_rate = kr * fe_in[0, :] * 2 / self.N
-                    alpha_i = self.x_reaction(self.T_arr[inner_ind])
+                    alpha_i = np.array([self.x_reaction(temp) for temp in self.T_arr[inner_ind]]).T
                     beta_i = self.N * alpha_i / np.sum([(i + 1) * alpha_i[i, :] for i in range(alpha_i.shape[0])])
                     self.Ei = self.get_evaporation_rate(self.T_arr[inner_ind], fe_in[1:, :], fe_in[0, :])
-                    source_i = beta_i.reshape(-1, 1) * rxn_rate - self.Ei
+                    source_i = beta_i * rxn_rate - self.Ei
                     source = np.vstack([-rxn_rate.reshape(1, -1), source_i])
-                    tmp_arr = self.D_arr.reshape(-1, 1) / self.dx ** 2 * (used_fe[:, 2:] - 2 * fe_in + used_fe[:, -2]) + source
+                    tmp_arr = np.concatenate([[self.D], self.D_arr]).reshape(-1, 1) / self.dx ** 2 * (used_fe[:, 2:] - 2 * fe_in + used_fe[:, :-2]) + source
                     return tmp_arr
 
                 fe_mat = np.vstack([self.fp_arr.reshape(1, -1), self.f_mat])
-                fe_new[:, inner_ind] = advance_rk4(fe_rate, ti * self.dt, fe_mat[inner_ind], self.dt)
+                fe_new[:, inner_ind] = advance_rk4(fe_rate, ti * self.dt, fe_mat[:, inner_ind], self.dt)
+                fe_new[fe_new < 0] = 0
                 fe_new[:, liquid_ind[0]] = fe_mat[:, liquid_ind[0]]
                 fe_new[:, liquid_ind[-1]] = fe_mat[:, liquid_ind[-1]]
                 fp_new = fe_new[0, :]
@@ -299,8 +311,9 @@ class Polymer:
                 kr = np.zeros(len(inner_ind))
                 kr[:self.Ei.shape[1]] = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * T_in[:self.Ei.shape[1]]))
                 Q_rxn = self.dH * 2 * rho_arr[inner_ind] / self.MW * kr
+                self.H_vap = self.get_H_vap(T_in[:self.Ei.shape[1]])
                 evap_heat = np.zeros(len(inner_ind))
-                evap_heat[:self.Ei.shape[1]] = np.sum(self.Ei * self.Hvap_arr.reshape(-1, 1), axis=0)
+                evap_heat[:self.Ei.shape[1]] = np.sum(self.Ei * self.H_vap, axis=0)
                 return (k_arr[inner_ind] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn - evap_heat) / (rho_arr[inner_ind] * self.cp)
 
             T_new[inner_ind] = advance_rk4(T_rate, ti * self.dt, self.T_arr[inner_ind], self.dt)
@@ -465,7 +478,7 @@ def anchor_point():
 
 if __name__ == '__main__':
     tt = Polymer()
-    tt.folder = "{}/output/integrated/Case1".format(work_dir)
+    tt.folder = "{}/output/integrated/Case2".format(work_dir)
     tt.db_path = '{}/data/polymer_evaporation.xlsx'.format(work_dir)
     tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer", "Styrene 4-mer", "Styrene 5-mer"]
     tt.x_reaction = lambda temp: np.array([8, 4, 2, 1, 1], dtype=float)
@@ -486,10 +499,11 @@ if __name__ == '__main__':
     tt.dH = 56e3  # J/mol, heat absorbed by beta scission
     tt.lh = 150e3  # J/kg, latent heat of fuel melting
     tt.N = 3000  # number of polymer degree
-    tt.L = 1e-2  # m
+    tt.D = 2e-15  # m2/s, polymer diffusion coefficient
+    tt.L = 2e-2  # m
     tt.t_end = 800  # s
-    tt.Nx = 50 + 1
-    tt.t_num = 100000 + 1
+    tt.Nx = 500 + 1
+    tt.t_num = 1000000 + 1
     tt.t_store = 100
     tt.main()
 
