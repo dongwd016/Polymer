@@ -63,8 +63,8 @@ def advance_rk4(dy_dt, t, y, dt):
 class Polymer:
     def __init__(self):
         self.save_list = ['folder', 'T0', 'q0', 'qb', 'k_s', 'k_l', 'rho_s', 'rho_l', 'MW0', 'cv', 'cp', 'A_beta', 'Ea', 'dH', 'MW', 'gamma', 'lh', 'T_melt', 'slope_Tb', 'L',
-                          't_end', 'Nx', 't_num', 't_store', 'Nt', 'dt', 'dx', 'cfl', 'db_path', 'sp_name_list', 'Ns', 'x_reaction', 'm_polymer_init', 'eta', 'S', 'P', 'lumped_A',
-                          'lumped_Ea', 't_end', 't_num', 'temp_control', 'n_threshold', 'diffusion_coefficient', 'N', 'D']
+                          't_end', 'Nx', 't_num', 't_store', 'Nt', 'dt', 'dx', 'cfl', 'db_path', 'sp_name_list', 'Ns', 'x_reaction_str', 'm_polymer_init', 'eta', 'S', 'P',
+                          'lumped_A', 'lumped_Ea', 't_end', 't_num', 'temp_control', 'n_threshold', 'diffusion_coefficient', 'N', 'D']
         self.result_list = ['x_arr', 't_arr', 't_arg_arr', 't_store_arr', 'T_mat', 'phase_mat', 'dL_arr', 'fp_mat', 'f_ten']
 
         self.folder = None
@@ -110,6 +110,7 @@ class Polymer:
         self.sp_name_list = None  # [Ns,], decomposition product name list
         self.Ns = None  # number of decomposition products
         self.x_reaction = None  # [Ns,], function of temperature, polymer decomposition product mole fraction array directly from reaction
+        self.x_reaction_str = None  # string of x_reaction to store in case_dict
         self.m_polymer_init = None  # kg, initial mass of polymer
         self.eta = None  # m2/kg, effective surface area coefficient
         self.S = None  # m2, effective surface area
@@ -158,6 +159,7 @@ class Polymer:
     def initialize(self):
         if not os.path.isdir(self.folder):
             os.makedirs(self.folder)
+        print('Output to {}.'.format(self.folder))
 
         # Property calculation
         self.S = self.eta * self.m_polymer_init
@@ -478,10 +480,13 @@ def anchor_point():
 
 if __name__ == '__main__':
     tt = Polymer()
-    tt.folder = "{}/output/integrated/Case2".format(work_dir)
+    tt.folder = "{}/output/integrated/Case6".format(work_dir)
     tt.db_path = '{}/data/polymer_evaporation.xlsx'.format(work_dir)
-    tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer", "Styrene 4-mer", "Styrene 5-mer"]
-    tt.x_reaction = lambda temp: np.array([8, 4, 2, 1, 1], dtype=float)
+    tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
+    tt.x_reaction = lambda T: np.array([33288 * T ** -2.174, 714581 * T ** -2.743, 1 - 33288 * T ** -2.174 - 714581 * T ** -2.743])
+    tt.x_reaction_str = 'lambda T: np.array([33288 * T ** -2.174, 714581 * T ** -2.743, 1 - 33288 * T ** -2.174 - 714581 * T ** -2.743])'
+    # tt.x_reaction = lambda T: np.array([487185 * T ** -2.413, 6e9 * T ** -4.192, 1 - 487185 * T ** -2.413 - 6e9 * T ** -4.192])
+    # tt.x_reaction_str = 'lambda T: np.array([487185 * T**-2.413, 6e9 * T**-4.192, 1 - 487185 * T**-2.413 - 6e9 * T**-4.192])'
     tt.T0 = 300  # K, initial temperature
     tt.T_melt = 165 + 273  # K, melting temperature
     tt.m_polymer_init = 10e-3  # kg, initial mass of polymer
