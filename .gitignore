@@ -10,3 +10,6 @@ Thumbs.db
 
 # Project specific ignore
 *~$*
+src/output
+src/.DS_Store
+
