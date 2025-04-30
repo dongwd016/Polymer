@@ -80,8 +80,8 @@ class Polymer:
                           'lumped_A', 'lumped_Ea', 't_end', 't_num', 'temp_control', 'n_threshold', 'diffusion_coefficient', 'N', 'D', 'phase_equilibrium', 'min_interval',
                           'check_point_step']
         self.save_npy_list = ['x_arr', 't_arr', 't_arg_arr', 't_store_arr']
-        self.result_list = ['T_mat', 'phase_mat', 'dL_arr', 'fp_mat', 'f_ten', 'Ei_ten']
-        self.cur_list = ['T_arr', 'phase_arr', 'dL', 'fp_arr', 'f_mat', 'Ei_mat']
+        self.result_list = ['T_mat', 'phase_mat', 'dL_arr', 'fp_mat', 'f_ten', 'Ei_ten', 'h_mat']
+        self.cur_list = ['T_arr', 'phase_arr', 'dL', 'fp_arr', 'f_mat', 'Ei_mat', 'h_arr']
         self.check_point_list = ['check_point_ind', 'check_point_ti', 'store_arr']
 
         self.folder = None
@@ -147,6 +147,8 @@ class Polymer:
 
         self.T_mat = None  # K [Nt,Nx], temperature profile time history
         self.T_arr = None  # K [Nx,], temperature profile at current time
+        self.h_mat = None  # J/kg [Nt,Nx], specific enthalpy profile time history
+        self.h_arr = None  # J/kg [Nx,], specific enthalpy profile at current time
         self.phase_mat = None  # [Nt,Nx], phase profile time history
         self.phase_arr = None  # [Nx,], phase profile at current time
         self.dL_arr = None  # m [Nt,], regressed length time history
@@ -225,7 +227,7 @@ class Polymer:
     def initialize(self):
         if not os.path.isdir(self.folder):
             os.makedirs(self.folder)
-        print('Output to {}.'.format(self.folder))
+        print('Output to {}.'.format(self.folder), flush=True)
         self.check_point_path = "{}/check_point_dict.json".format(self.folder)
 
         # Property calculation
@@ -244,7 +246,7 @@ class Polymer:
         self.dt = self.t_arr[1] - self.t_arr[0]
         self.dx = self.x_arr[1] - self.x_arr[0]
         self.cfl = self.k_l / (self.rho_l * self.cp) * self.dt / self.dx ** 2
-        print('alpha * dt / dx^2 = {}'.format(self.cfl))
+        print('alpha * dt / dx^2 = {}'.format(self.cfl), flush=True)
 
         # decomposition product information loading
         if self.db is None:
@@ -267,7 +269,8 @@ class Polymer:
         if not os.path.isfile(self.check_point_path):
             self.save_case_dict()
             self.T_arr = self.T0 * np.ones(self.Nx)
-            self.phase_arr = np.zeros(self.Nx)  # 0: solid; 1: s-l mixture; 2: liquid; 3: gas.
+            self.h_arr = self.cp * self.T_arr
+            self.phase_arr = np.zeros(self.Nx)  # 0: solid; 0-1: s-l mixture, liquid fraction; 2: liquid; 3: gas.
             self.dL = 0
             self.fp_arr = np.full(self.Nx, np.nan)
             self.f_mat = np.full((self.Ns, self.Nx), np.nan)
@@ -305,6 +308,7 @@ class Polymer:
 
     def get_H_vap(self, T):
         H_vap = []
+        T = 600 * np.ones_like(T)
         for sp_name in self.sp_name_list:
             df = self.df_dict[sp_name]
             dB = df["dB"]
@@ -327,17 +331,35 @@ class Polymer:
     def main(self):
         self.initialize()
 
-        for ti in tqdm(range(self.check_point_ti + 1, self.t_num), mininterval=self.min_interval):
-            rho_dict = {0: self.rho_s, 1: 0.5 * (self.rho_s + self.rho_l), 2: self.rho_l, 3: np.nan}
-            k_dict = {0: self.k_s, 1: 0.5 * (self.k_s + self.k_l), 2: self.k_l, 3: np.nan}
+        def rho_func(frac):
+            if frac == 0:
+                return self.rho_s
+            elif frac == 2:
+                return self.rho_l
+            elif frac == 3:
+                return np.nan
+            else:
+                return frac * self.rho_l + (1 - frac) * self.rho_s
 
+        def k_func(frac):
+            if frac == 0:
+                return self.k_s
+            elif frac == 2:
+                return self.k_l
+            elif frac == 3:
+                return np.nan
+            else:
+                return frac * self.k_l + (1 - frac) * self.k_s
+
+        for ti in tqdm(range(self.check_point_ti + 1, self.t_num), mininterval=self.min_interval):
             T_new = np.full(self.Nx, np.nan)
+            h_new = np.full(self.Nx, np.nan)
             fp_new = np.full(self.Nx, np.nan)
             f_new = np.full((self.Ns, self.Nx), np.nan)
             fe_new = np.full((self.Ns + 1, self.Nx), np.nan)
 
-            rho_arr = np.array([rho_dict[p] for p in self.phase_arr])
-            k_arr = np.array([k_dict[p] for p in self.phase_arr])
+            rho_arr = np.array([rho_func(p) for p in self.phase_arr])
+            k_arr = np.array([k_func(p) for p in self.phase_arr])
 
             liquid_ind = np.where(self.phase_arr == 2)[0]
             not_gas_ind = np.where(self.phase_arr != 3)[0]
@@ -369,6 +391,21 @@ class Polymer:
 
             # Energy equation
             def T_rate(t, T_in):
+                used_T = np.concatenate([[self.T_arr[top_ind]], T_in, [self.T_arr[-1]]])
+                kr = np.zeros(len(ls_inner_ind))
+                liquid_len = min(max(len(liquid_ind) - 1, 0), len(ls_inner_ind))
+                kr[:liquid_len] = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * T_in[:liquid_len]))
+                fp_tmp = np.zeros(len(ls_inner_ind))
+                fp_tmp[:liquid_len] = self.fp_arr[top_ind + 1:top_ind + 1 + liquid_len]
+                Q_rxn = self.dH * kr * fp_tmp / self.dx
+                # Q_rxn = self.dH * 2 * rho_arr[ls_inner_ind] / self.MW * kr
+                self.H_vap = self.get_H_vap(T_in[:liquid_len])
+                evap_heat = np.zeros(len(ls_inner_ind))
+                evap_heat[:liquid_len] = np.sum(self.Ei[:, 1:liquid_len + 1] * self.H_vap, axis=0)
+                tmp_arr = (k_arr[ls_inner_ind] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn - evap_heat) / (rho_arr[ls_inner_ind] * self.cp)
+                return tmp_arr
+            
+            def h_rate(t, T_in):
                 used_T = np.concatenate([[self.T_arr[top_ind]], T_in, [self.T_arr[-1]]])
                 kr = np.zeros(len(ls_inner_ind))
                 liquid_len = min(max(len(liquid_ind) - 1, 0), len(ls_inner_ind))
@@ -540,7 +577,7 @@ def anchor_point():
 
 if __name__ == '__main__':
     tt = Polymer()
-    tt.folder = "{}/output/integrated/Case29".format(work_dir)
+    tt.folder = "{}/output/integrated/Case35".format(work_dir)
     tt.db_path = '{}/data/polymer_evaporation.xlsx'.format(work_dir)
     tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
     # tt.sp_name_list = ["Styrene"]
@@ -548,8 +585,10 @@ if __name__ == '__main__':
     ### SF-HyChem setting
     # tt.x_reaction = lambda T: np.array([8, 4, 2, 1, 1], dtype=float)
     # tt.x_reaction_str = 'lambda T: np.array([8, 4, 2, 1, 1], dtype=float)'
-    tt.x_reaction = lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.
-    tt.x_reaction_str = 'lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.'
+    tt.x_reaction = lambda T: np.array([0.9, 0.05, 0.05], dtype=float)
+    tt.x_reaction_str = 'lambda T: np.array([0.9, 0.05, 0.05], dtype=float)'
+    # tt.x_reaction = lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.
+    # tt.x_reaction_str = 'lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.'
     # tt.x_reaction = lambda T: np.array([1 - 487185 * T ** -2.413 - 6e9 * T ** -4.192, 487185 * T ** -2.413, 6e9 * T ** -4.192])  # CRECK model
     # tt.x_reaction_str = 'lambda T: np.array([1 - 487185 * T ** -2.413 - 6e9 * T ** -4.192, 487185 * T ** -2.413, 6e9 * T ** -4.192])  # CRECK model'
     # tt.x_reaction = lambda T: np.array([1.0])
@@ -577,7 +616,7 @@ if __name__ == '__main__':
     # tt.D = 0  # m2/s, polymer diffusion coefficient
 
     tt.lumped_A = 2e13  # 1/s, lumped pre-exponential factor for polymer decomposition
-    tt.lumped_Ea = 111.6e3  # J/mol, lumped activation energy for polymer decomposition
+    tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
     tt.T_melt = 240 + 273  # K, melting temperature
     tt.k_s = 0.16  # W/m·K, solid phase thermal conductivity
     tt.k_l = 0.135  # W/m·K, liquid phase thermal conductivity
@@ -586,7 +625,7 @@ if __name__ == '__main__':
     tt.MW0 = 104e-3  # kg/mol, C8H8 (styrene) molecular weight
     tt.cv = 1.3e3  # J/kg·K
     tt.cp = tt.cv
-    tt.dH = 111.6e3  # J/mol, heat absorbed by beta scission
+    tt.dH = 73.4e3  # J/mol, heat absorbed by beta scission
     tt.lh = 45e3  # J/kg, latent heat of fuel melting
     tt.N = 3000  # number of polymer degree
     tt.D = 3e-12  # m2/s, polymer diffusion coefficient
