@@ -404,8 +404,43 @@ class Polymer:
                 evap_heat[:liquid_len] = np.sum(self.Ei[:, 1:liquid_len + 1] * self.H_vap, axis=0)
                 tmp_arr = (k_arr[ls_inner_ind] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn - evap_heat) / (rho_arr[ls_inner_ind] * self.cp)
                 return tmp_arr
-            
-            def h_rate(t, T_in):
+
+            # T_new[ls_inner_ind] = advance_rk4(T_rate, ti * self.dt, self.T_arr[ls_inner_ind], self.dt)
+            # Boundary condition (dT/dx = 0 at the bottom solid surface)
+            # T_new[-1] = T_new[-2]
+            #
+            # # Steps to deal with solid-liquid phase change (melting)
+            # phase_change_arg = np.where(np.isin(self.phase_arr, [0, 1]) & (T_new > self.T_melt))[0]
+            # self.phase_arr[phase_change_arg] = 1
+            # extra_T_arr = T_new[phase_change_arg] - self.T_melt
+            # T_new[phase_change_arg] = self.T_melt
+            # self.store_arr[phase_change_arg] += extra_T_arr
+            #
+            # lh_T = self.lh / self.cp
+            # over_arg = np.intersect1d(np.where(self.store_arr >= lh_T)[0], phase_change_arg)
+            # self.phase_arr[over_arg] = 2
+            # T_new[over_arg] = self.T_melt + (self.store_arr[over_arg] - lh_T)
+            #
+            # # Boundary condition (dT/dx = 0 at the top liquid surface with constant heat flux Q0)
+            # T_new[top_ind] = T_new[top_ind + 1] + self.q0 / k_arr[top_ind] * self.dx
+            # if self.phase_arr[top_ind] in [0, 1] and T_new[top_ind] > self.T_melt:
+            #     self.phase_arr[top_ind] = 1
+            #     extra_T = T_new[top_ind] - self.T_melt
+            #     T_new[top_ind] = self.T_melt
+            #     self.store_arr[top_ind] += extra_T
+            #     if self.store_arr[top_ind] >= lh_T:
+            #         self.phase_arr[top_ind] = 2
+            #         T_new[top_ind] = self.T_melt + (self.store_arr[top_ind] - lh_T)
+
+            def h_rate(t, h_in):
+                solid_arg = np.where(h_in < self.cp * self.T_melt)[0]
+                sl_arg = np.where((h_in >= self.cp * self.T_melt) & (h_in <= self.cp * self.T_melt + self.lh))[0]
+                liquid_arg = np.where(h_in > self.cp * self.T_melt + self.lh)[0]
+                T_in = np.zeros_like(h_in)
+                T_in[solid_arg] = h_in[solid_arg] / self.cp
+                T_in[sl_arg] = self.T_melt
+                T_in[liquid_arg] = self.T_melt + (h_in[liquid_arg] - self.cp * self.T_melt - self.lh) / self.cp
+
                 used_T = np.concatenate([[self.T_arr[top_ind]], T_in, [self.T_arr[-1]]])
                 kr = np.zeros(len(ls_inner_ind))
                 liquid_len = min(max(len(liquid_ind) - 1, 0), len(ls_inner_ind))
@@ -417,37 +452,33 @@ class Polymer:
                 self.H_vap = self.get_H_vap(T_in[:liquid_len])
                 evap_heat = np.zeros(len(ls_inner_ind))
                 evap_heat[:liquid_len] = np.sum(self.Ei[:, 1:liquid_len + 1] * self.H_vap, axis=0)
-                tmp_arr = (k_arr[ls_inner_ind] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn - evap_heat) / (rho_arr[ls_inner_ind] * self.cp)
+                tmp_arr = (k_arr[ls_inner_ind] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn - evap_heat) / rho_arr[ls_inner_ind]
                 return tmp_arr
 
-            # T_new[top_ind:] = self.T_arr[top_ind:] + self.q0 / k_arr[top_ind:] * self.dx
+            def h_top_rate(t, h_top):
+                T_top = self.T_arr[top_ind]
+                if self.phase_arr[top_ind] == 2:
+                    kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * T_top))
+                    Q_rxn = self.dH * kr * self.fp_arr[top_ind] / self.dx
+                    evap_heat = np.sum(self.Ei[:, 0] * self.get_H_vap(T_top))
+                else:
+                    Q_rxn = 0
+                    evap_heat = 0
+                tmp_arr = ((k_arr[top_ind] * (self.T_arr[top_ind + 2] - T_top) / (2 * self.dx) + self.q0) / self.dx - Q_rxn - evap_heat) / rho_arr[top_ind]
+                return tmp_arr
 
-            T_new[ls_inner_ind] = advance_rk4(T_rate, ti * self.dt, self.T_arr[ls_inner_ind], self.dt)
-            # Boundary condition (dT/dx = 0 at the bottom solid surface)
-            T_new[-1] = T_new[-2]
-
-            # Steps to deal with solid-liquid phase change (melting)
-            phase_change_arg = np.where(np.isin(self.phase_arr, [0, 1]) & (T_new > self.T_melt))[0]
-            self.phase_arr[phase_change_arg] = 1
-            extra_T_arr = T_new[phase_change_arg] - self.T_melt
-            T_new[phase_change_arg] = self.T_melt
-            self.store_arr[phase_change_arg] += extra_T_arr
-
-            lh_T = self.lh / self.cp
-            over_arg = np.intersect1d(np.where(self.store_arr >= lh_T)[0], phase_change_arg)
-            self.phase_arr[over_arg] = 2
-            T_new[over_arg] = self.T_melt + (self.store_arr[over_arg] - lh_T)
-
-            # Boundary condition (dT/dx = 0 at the top liquid surface with constant heat flux Q0)
-            T_new[top_ind] = T_new[top_ind + 1] + self.q0 / k_arr[top_ind] * self.dx
-            if self.phase_arr[top_ind] in [0, 1] and T_new[top_ind] > self.T_melt:
-                self.phase_arr[top_ind] = 1
-                extra_T = T_new[top_ind] - self.T_melt
-                T_new[top_ind] = self.T_melt
-                self.store_arr[top_ind] += extra_T
-                if self.store_arr[top_ind] >= lh_T:
-                    self.phase_arr[top_ind] = 2
-                    T_new[top_ind] = self.T_melt + (self.store_arr[top_ind] - lh_T)
+            h_new[ls_inner_ind] = advance_rk4(h_rate, ti * self.dt, self.h_arr[ls_inner_ind], self.dt)
+            h_new[top_ind] = advance_rk4(h_top_rate, ti * self.dt, self.h_arr[top_ind], self.dt)
+            h_new[-1] = h_new[-2]
+            solid_arg = np.where(h_new < self.cp * self.T_melt)[0]
+            sl_arg = np.where((h_new >= self.cp * self.T_melt) & (h_new <= self.cp * self.T_melt + self.lh))[0]
+            liquid_arg = np.where(h_new > self.cp * self.T_melt + self.lh)[0]
+            T_new[solid_arg] = h_new[solid_arg] / self.cp
+            T_new[sl_arg] = self.T_melt
+            T_new[liquid_arg] = self.T_melt + (h_new[liquid_arg] - self.cp * self.T_melt - self.lh) / self.cp
+            self.phase_arr[solid_arg] = 0
+            self.phase_arr[sl_arg] = (h_new[sl_arg] - self.cp * self.T_melt) / self.lh
+            self.phase_arr[liquid_arg] = 2
 
             if len(liquid_ind) > 0:
                 # fe mean "phi entire". Phi=letter for concentration, entire means combined polymer and decomposition products
@@ -545,6 +576,7 @@ class Polymer:
 
             self.phase_arr[top_ind: int(np.round(self.dL / self.dx))] = 3
             self.T_arr = T_new.copy()
+            self.h_arr = h_new.copy()
             self.fp_arr = fp_new.copy()
             self.f_mat = f_new.copy()
             self.Ei_mat = np.full((self.Ns, self.Nx), np.nan)
@@ -577,7 +609,7 @@ def anchor_point():
 
 if __name__ == '__main__':
     tt = Polymer()
-    tt.folder = "{}/output/integrated/Case35".format(work_dir)
+    tt.folder = "{}/output/integrated/Case40".format(work_dir)
     tt.db_path = '{}/data/polymer_evaporation.xlsx'.format(work_dir)
     tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
     # tt.sp_name_list = ["Styrene"]
@@ -639,13 +671,13 @@ if __name__ == '__main__':
 
     tt.L = 2e-2  # m
     tt.t_end = 400  # s
-    tt.Nx = 5000 + 1
-    tt.t_num = 10000000 + 1
-    tt.t_store = 1000
+    tt.Nx = 500 + 1
+    tt.t_num = 100000 + 1
+    tt.t_store = 100
 
     tt.phase_equilibrium = False
     tt.min_interval = 2
-    tt.check_point_step = 100000
+    tt.check_point_step = 10000
     tt.main()
 
     pass
