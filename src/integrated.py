@@ -52,7 +52,7 @@ def json_deconvert(obj):
 
 
 def advance_ee(dy_dt, t, y, dt):
-    return y + dy_dt(y, t) * dt
+    return y + dy_dt(t, y) * dt
 
 
 def advance_rk4(dy_dt, t, y, dt):
@@ -95,6 +95,8 @@ class Polymer:
             "lh",
             "T_melt",
             "slope_Tb",
+            "impurity",
+            "boundary_condition",
             "L",
             "t_end",
             "Nx",
@@ -150,6 +152,8 @@ class Polymer:
         self.lh = None  # J/kg, latent heat of POM melting
         self.T_melt = None  # K, POM melting point
         self.slope_Tb = None  # K/s, heating rate
+        self.impurity = None  # impurity percentage
+        self.boundary_condition = None  # 'top q0', 'TGA'
         self.N = None  # polymer polymerization degree, MW/MW0
         self.D = None  # m2/s, polymer diffusion coefficient
         self.phase_equilibrium = None  # whether consider phase equilibrium
@@ -222,7 +226,7 @@ class Polymer:
         self.D_arr = None  # m2/s [Ns,] molecular weight array of each product
         self.H_vap = None  # J/mol [Ns,] molecular weight array of each product
         self.P_sat = None  # Pa, [Ns,] vapor pressure array of each product
-        self.Ei = None  # mol/m3/s, [Ns,Nx_liq] evaporation rate of each product
+        # self.Ei = None  # mol/m3/s, [Ns,Nx_liq] evaporation rate of each product
         # self.x = None  # [Ns,Nx_liq] mole fraction of each product
 
         self.check_point_path = None
@@ -321,11 +325,12 @@ class Polymer:
         if not os.path.isfile(self.check_point_path):
             self.save_case_dict()
             self.T_arr = self.T0 * np.ones(self.Nx)
-            self.h_arr = self.cp * self.T_arr
             if self.T0 < self.T_melt:
-                self.phase_arr = np.zeros(self.Nx)  # 0: solid; 0-1: s-l mixture, liquid fraction; 2: liquid; 3: gas.
+                self.h_arr = self.cp * self.T_arr
+                self.phase_arr = np.zeros(self.Nx)  # 0: solid; 0-1: s-l mixture, liquid fraction; 1: liquid; 2: gas.
             else:
-                self.phase_arr = 2 * np.ones(self.Nx)
+                self.h_arr = self.cp * (self.T_arr - self.T_melt) + self.lh + self.cp * self.T_melt
+                self.phase_arr = np.ones(self.Nx)
             self.dL = 0
             self.fp_arr = np.full(self.Nx, np.nan)
             self.f_mat = np.full((self.Ns, self.Nx), np.nan)
@@ -366,7 +371,7 @@ class Polymer:
             return np.zeros_like(T)
 
         H_vap = []
-        T = 600 * np.ones_like(T)
+        # T = 600 * np.ones_like(T)
         for sp_name in self.sp_name_list:
             df = self.df_dict[sp_name]
             dB = df["dB"]
@@ -392,9 +397,9 @@ class Polymer:
         def rho_func(frac):
             if frac == 0:
                 return self.rho_s
-            elif frac == 2:
+            elif frac == 1:
                 return self.rho_l
-            elif frac == 3:
+            elif frac == 2:
                 return np.nan
             else:
                 return frac * self.rho_l + (1 - frac) * self.rho_s
@@ -402,9 +407,9 @@ class Polymer:
         def k_func(frac):
             if frac == 0:
                 return self.k_s
-            elif frac == 2:
+            elif frac == 1:
                 return self.k_l
-            elif frac == 3:
+            elif frac == 2:
                 return np.nan
             else:
                 return frac * self.k_l + (1 - frac) * self.k_s
@@ -419,8 +424,8 @@ class Polymer:
             rho_arr = np.array([rho_func(p) for p in self.phase_arr])
             k_arr = np.array([k_func(p) for p in self.phase_arr])
 
-            liquid_ind = np.where(self.phase_arr == 2)[0]
-            not_gas_ind = np.where(self.phase_arr != 3)[0]
+            liquid_ind = np.where(self.phase_arr == 1)[0]
+            not_gas_ind = np.where(self.phase_arr != 2)[0]
             if len(not_gas_ind) < 3:
                 self.log_print("All gas!")
                 break
@@ -429,7 +434,9 @@ class Polymer:
             boundary_ind = liquid_ind[[0, -1]] if len(liquid_ind) > 1 else liquid_ind
             ls_inner_ind = not_gas_ind[1:-1]
 
-            self.Ei = np.zeros((self.Ns, len(liquid_ind)))
+            self.Ei_mat = np.full((self.Ns, self.Nx), np.nan)
+            self.Ei_mat[:, liquid_ind] = 0
+            impurity_factor = np.maximum(1 - self.impurity * self.L / (self.L - self.dL), 0)
             # No liquid layer if len(liquid_ind) =< 3
             if len(liquid_ind) > 0:
                 # Species equation (solved before T equation)
@@ -441,54 +448,12 @@ class Polymer:
                         self.fp_arr[ind] = rho_arr[ind] / self.MW * self.dx
                         self.f_mat[:, ind] = 0
                 if self.phase_equilibrium:
-                    self.Ei = self.get_evaporation_rate(self.T_arr[liquid_ind], self.f_mat[:, liquid_ind], self.fp_arr[liquid_ind])
+                    self.Ei_mat[:, liquid_ind] = self.get_evaporation_rate(self.T_arr[liquid_ind], self.f_mat[:, liquid_ind], self.fp_arr[liquid_ind])
                 else:
                     kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * self.T_arr[liquid_ind]))
                     alpha_i = np.array([self.x_reaction(temp) for temp in self.T_arr[liquid_ind]]).T
-                    self.Ei = alpha_i * kr * self.fp_arr[liquid_ind] / self.dx
-
-            # # Energy equation
-            # def T_rate(t, T_in):
-            #     used_T = np.concatenate([[self.T_arr[top_ind]], T_in, [self.T_arr[-1]]])
-            #     kr = np.zeros(len(ls_inner_ind))
-            #     liquid_len = min(max(len(liquid_ind) - 1, 0), len(ls_inner_ind))
-            #     kr[:liquid_len] = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * T_in[:liquid_len]))
-            #     fp_tmp = np.zeros(len(ls_inner_ind))
-            #     fp_tmp[:liquid_len] = self.fp_arr[top_ind + 1:top_ind + 1 + liquid_len]
-            #     Q_rxn = self.dH * kr * fp_tmp / self.dx
-            #     # Q_rxn = self.dH * 2 * rho_arr[ls_inner_ind] / self.MW * kr
-            #     self.H_vap = self.get_H_vap(T_in[:liquid_len])
-            #     evap_heat = np.zeros(len(ls_inner_ind))
-            #     evap_heat[:liquid_len] = np.sum(self.Ei[:, 1:liquid_len + 1] * self.H_vap, axis=0)
-            #     tmp_arr = (k_arr[ls_inner_ind] / self.dx ** 2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn - evap_heat) / (rho_arr[ls_inner_ind] * self.cp)
-            #     return tmp_arr
-
-            # T_new[ls_inner_ind] = advance_rk4(T_rate, ti * self.dt, self.T_arr[ls_inner_ind], self.dt)
-            # Boundary condition (dT/dx = 0 at the bottom solid surface)
-            # T_new[-1] = T_new[-2]
-
-            # # Steps to deal with solid-liquid phase change (melting)
-            # phase_change_arg = np.where(np.isin(self.phase_arr, [0, 1]) & (T_new > self.T_melt))[0]
-            # self.phase_arr[phase_change_arg] = 1
-            # extra_T_arr = T_new[phase_change_arg] - self.T_melt
-            # T_new[phase_change_arg] = self.T_melt
-            # self.store_arr[phase_change_arg] += extra_T_arr
-
-            # lh_T = self.lh / self.cp
-            # over_arg = np.intersect1d(np.where(self.store_arr >= lh_T)[0], phase_change_arg)
-            # self.phase_arr[over_arg] = 2
-            # T_new[over_arg] = self.T_melt + (self.store_arr[over_arg] - lh_T)
-
-            # # Boundary condition (dT/dx = 0 at the top liquid surface with constant heat flux Q0)
-            # T_new[top_ind] = T_new[top_ind + 1] + self.q0 / k_arr[top_ind] * self.dx
-            # if self.phase_arr[top_ind] in [0, 1] and T_new[top_ind] > self.T_melt:
-            #     self.phase_arr[top_ind] = 1
-            #     extra_T = T_new[top_ind] - self.T_melt
-            #     T_new[top_ind] = self.T_melt
-            #     self.store_arr[top_ind] += extra_T
-            #     if self.store_arr[top_ind] >= lh_T:
-            #         self.phase_arr[top_ind] = 2
-            #         T_new[top_ind] = self.T_melt + (self.store_arr[top_ind] - lh_T)
+                    self.Ei_mat[:, liquid_ind] = alpha_i * kr * self.fp_arr[liquid_ind] / self.dx
+                self.Ei_mat[:, liquid_ind] *= impurity_factor
 
             # Energy equation
             def h_rate(t, h_in):
@@ -501,16 +466,40 @@ class Polymer:
                 T_in[liquid_arg] = self.T_melt + (h_in[liquid_arg] - self.cp * self.T_melt - self.lh) / self.cp
 
                 used_T = np.concatenate([[self.T_arr[top_ind]], T_in, [self.T_arr[-1]]])
-                kr = np.zeros(len(ls_inner_ind))
-                liquid_len = min(max(len(liquid_ind) - 1, 0), len(ls_inner_ind))
-                kr[:liquid_len] = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * T_in[:liquid_len]))
-                fp_tmp = np.zeros(len(ls_inner_ind))
-                fp_tmp[:liquid_len] = self.fp_arr[top_ind + 1 : top_ind + 1 + liquid_len]
-                Q_rxn = self.dH * kr * fp_tmp / self.dx
-                # Q_rxn = self.dH * 2 * rho_arr[ls_inner_ind] / self.MW * kr
-                self.H_vap = self.get_H_vap(T_in[:liquid_len])
-                evap_heat = np.zeros(len(ls_inner_ind))
-                evap_heat[:liquid_len] = np.sum(self.Ei[:, 1 : liquid_len + 1] * self.H_vap, axis=0)
+
+                def get_tmp_fp_Ei(ind_list):
+                    Ei_mat = np.full((self.Ns, self.Nx), np.nan)
+                    Ei_mat[:, ind_list] = 0
+                    fp_arr = self.fp_arr.copy()
+                    f_mat = self.f_mat.copy()
+                    # No liquid layer if len(liquid_ind) =< 3
+                    if len(ind_list) > 0:
+                        # Species equation (solved before T equation)
+                        for ind in ind_list:
+                            # when just turning into liquid (only solid at the beginning)
+                            # then it is initialized as only polymer, no decomposition products
+                            # fp is polymer concentration [mol/m3], f_mat matrix for decomposition products
+                            if np.isnan(fp_arr[ind]):
+                                fp_arr[ind] = rho_arr[ind] / self.MW * self.dx
+                                f_mat[:, ind] = 0
+                        if self.phase_equilibrium:
+                            Ei_mat[:, ind_list] = self.get_evaporation_rate(self.T_arr[ind_list], f_mat[:, ind_list], fp_arr[ind_list])
+                        else:
+                            kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * self.T_arr[ind_list]))
+                            alpha_i = np.array([self.x_reaction(temp) for temp in self.T_arr[ind_list]]).T
+                            Ei_mat[:, ind_list] = alpha_i * kr * fp_arr[ind_list] / self.dx
+                        Ei_mat[:, ind_list] *= impurity_factor
+                    return fp_arr, Ei_mat
+
+                fp_arr, Ei_mat = get_tmp_fp_Ei(ls_inner_ind[liquid_arg])
+                Q_rxn = np.zeros_like(h_in)
+                kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * T_in[liquid_arg])) * impurity_factor
+                Q_rxn[liquid_arg] = self.dH * kr * fp_arr[ls_inner_ind[liquid_arg]] / self.dx
+
+                self.H_vap = self.get_H_vap(T_in[liquid_arg])
+                evap_heat = np.zeros_like(h_in)
+                evap_heat[liquid_arg] = np.sum(Ei_mat[:, ls_inner_ind[liquid_arg]] * self.H_vap, axis=0)
+
                 tmp_arr = (k_arr[ls_inner_ind] / self.dx**2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn - evap_heat) / rho_arr[ls_inner_ind]
                 return tmp_arr
 
@@ -520,8 +509,20 @@ class Polymer:
                 return tmp_arr
 
             h_new[ls_inner_ind] = advance_rk4(h_rate, ti * self.dt, self.h_arr[ls_inner_ind], self.dt)
-            h_new[top_ind] = advance_rk4(h_top_rate, ti * self.dt, self.h_arr[top_ind], self.dt)
-            h_new[-1] = h_new[-2]
+            if self.boundary_condition == "top q0":
+                h_new[top_ind] = advance_rk4(h_top_rate, ti * self.dt, self.h_arr[top_ind], self.dt)
+                h_new[-1] = h_new[-2]
+            elif self.boundary_condition == "TGA":
+                Tb = self.T0 + self.slope_Tb * ti * self.dt
+                if Tb < self.T_melt:
+                    hb = self.cp * Tb
+                else:
+                    hb = self.cp * (Tb - self.T_melt) + self.lh + self.cp * self.T_melt
+                # h_new[top_ind] = h_new[top_ind + 1]
+                h_new[top_ind] = hb
+                h_new[-1] = hb
+            else:
+                raise Exception("Unknown boundary condition: {}!".format(self.boundary_condition))
             solid_arg = np.where(h_new < self.cp * self.T_melt)[0]
             sl_arg = np.where((h_new >= self.cp * self.T_melt) & (h_new <= self.cp * self.T_melt + self.lh))[0]
             liquid_arg = np.where(h_new > self.cp * self.T_melt + self.lh)[0]
@@ -530,7 +531,7 @@ class Polymer:
             T_new[liquid_arg] = self.T_melt + (h_new[liquid_arg] - self.cp * self.T_melt - self.lh) / self.cp
             self.phase_arr[solid_arg] = 0
             self.phase_arr[sl_arg] = (h_new[sl_arg] - self.cp * self.T_melt) / self.lh
-            self.phase_arr[liquid_arg] = 2
+            self.phase_arr[liquid_arg] = 1
 
             if len(liquid_ind) > 0:
                 # fe mean "phi entire". Phi=letter for concentration, entire means combined polymer and decomposition products
@@ -576,6 +577,7 @@ class Polymer:
                         Ei = self.get_evaporation_rate(self.T_arr[liquid_ind], fe_lq[1:, :], fe_lq[0, :])
                     else:
                         Ei = alpha_i * kr * fe_lq[0, :] / self.dx
+                    Ei *= impurity_factor
                     # for decomposition products (reaction + evaporation, Ei)
                     source_i = alpha_i * kr * fe_lq[0, :] - Ei * self.dx
                     source_p = sum([(ii + 1) * alpha_i[ii, :] for ii in range(alpha_i.shape[0])]) / self.N * kr * fe_lq[0, :]
@@ -600,232 +602,7 @@ class Polymer:
                 h_arr = h_arr[::-1]
 
                 # thickness of the gas-phase (from balancing gas-phase mass produced and liquid-phase mass consumed)
-                self.dL += np.sum(self.Ei * self.dt * self.MW_arr.reshape(-1, 1) / self.rho_l * self.dx)
-
-                # fp_new_bs = fp_new.copy()
-                # f_new_bs = f_new.copy()
-
-                sum_h = np.array(list(itertools.accumulate(h_arr))) - h_arr / 2
-                new_top_ind = int(np.round(self.dL / self.dx))
-
-                def get_new_f(f):
-                    f_in = f.copy()
-                    f_arr = f_in[liquid_ind][::-1]
-                    c_arr = f_arr / h_arr
-                    c_fn = scipy.interpolate.interp1d(sum_h, c_arr, bounds_error=False, fill_value=(c_arr[0], c_arr[-1]))
-                    new_c = c_fn(self.dx * np.arange(len(sum_h)) + self.dx / 2)
-                    new_f = new_c * self.dx
-                    new_f = new_f[::-1]
-                    f_in[liquid_ind] = new_f
-                    f_in[top_ind:new_top_ind] = np.nan
-                    return f_in
-
-                fp_new = get_new_f(fp_new)
-                for i in range(f_new.shape[0]):
-                    f_new[i, :] = get_new_f(f_new[i, :])
-                # T_new = get_new_f(T_new)
-                T_new[top_ind:new_top_ind] = np.nan
-
-            self.phase_arr[top_ind : int(np.round(self.dL / self.dx))] = 3
-            self.T_arr = T_new.copy()
-            self.h_arr = h_new.copy()
-            self.fp_arr = fp_new.copy()
-            self.f_mat = f_new.copy()
-            self.Ei_mat = np.full((self.Ns, self.Nx), np.nan)
-            self.Ei_mat[:, liquid_ind] = self.Ei.copy()
-            # self.P_sat_mat = np.full((self.Ns, self.Nx), np.nan)
-            # self.P_sat_mat[:, liquid_ind] = self.P_sat.copy()
-            # self.x_mat = np.full((self.Ns, self.Nx), np.nan)
-            # self.x_mat[:, liquid_ind] = self.x.copy()
-            # self.fp_arr_bs = fp_new_bs.copy()
-            # self.f_mat_bs = f_new_bs.copy()
-
-            if ti in self.t_arg_arr:
-                self.record_state()
-                if ti % self.check_point_step == 0:
-                    self.check_point_ind += 1
-                    self.check_point_ti = ti
-                    self.save_check_point()
-                    self.initialize()
-
-        if len(self.T_mat) > 0:
-            self.check_point_ind += 1
-            self.check_point_ti = ti
-            self.save_check_point()
-        self.save_result()
-
-    def main_TGA(self):
-        self.initialize()
-
-        def rho_func(frac):
-            if frac == 0:
-                return self.rho_s
-            elif frac == 2:
-                return self.rho_l
-            elif frac == 3:
-                return np.nan
-            else:
-                return frac * self.rho_l + (1 - frac) * self.rho_s
-
-        def k_func(frac):
-            if frac == 0:
-                return self.k_s
-            elif frac == 2:
-                return self.k_l
-            elif frac == 3:
-                return np.nan
-            else:
-                return frac * self.k_l + (1 - frac) * self.k_s
-
-        for ti in tqdm(range(self.check_point_ti + 1, self.t_num), mininterval=self.min_interval):
-            T_new = np.full(self.Nx, np.nan)
-            h_new = np.full(self.Nx, np.nan)
-            fp_new = np.full(self.Nx, np.nan)
-            f_new = np.full((self.Ns, self.Nx), np.nan)
-            fe_new = np.full((self.Ns + 1, self.Nx), np.nan)
-
-            rho_arr = np.array([rho_func(p) for p in self.phase_arr])
-            k_arr = np.array([k_func(p) for p in self.phase_arr])
-
-            liquid_ind = np.where(self.phase_arr == 2)[0]
-            not_gas_ind = np.where(self.phase_arr != 3)[0]
-            if len(not_gas_ind) < 3:
-                self.log_print("All gas!")
-                break
-            top_ind = not_gas_ind[0]
-            inner_ind = liquid_ind[1:-1]
-            boundary_ind = liquid_ind[[0, -1]] if len(liquid_ind) > 1 else liquid_ind
-            ls_inner_ind = not_gas_ind[1:-1]
-
-            self.Ei = np.zeros((self.Ns, len(liquid_ind)))
-            # No liquid layer if len(liquid_ind) =< 3
-            if len(liquid_ind) > 0:
-                # Species equation (solved before T equation)
-                for ind in liquid_ind:
-                    # when just turning into liquid (only solid at the beginning)
-                    # then it is initialized as only polymer, no decomposition products
-                    # fp is polymer concentration [mol/m3], f_mat matrix for decomposition products
-                    if np.isnan(self.fp_arr[ind]):
-                        self.fp_arr[ind] = rho_arr[ind] / self.MW * self.dx
-                        self.f_mat[:, ind] = 0
-                if self.phase_equilibrium:
-                    self.Ei = self.get_evaporation_rate(self.T_arr[liquid_ind], self.f_mat[:, liquid_ind], self.fp_arr[liquid_ind])
-                else:
-                    kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * self.T_arr[liquid_ind]))
-                    alpha_i = np.array([self.x_reaction(temp) for temp in self.T_arr[liquid_ind]]).T
-                    self.Ei = alpha_i * kr * self.fp_arr[liquid_ind] / self.dx
-
-            # Energy equation
-            def h_rate(t, h_in):
-                solid_arg = np.where(h_in < self.cp * self.T_melt)[0]
-                sl_arg = np.where((h_in >= self.cp * self.T_melt) & (h_in <= self.cp * self.T_melt + self.lh))[0]
-                liquid_arg = np.where(h_in > self.cp * self.T_melt + self.lh)[0]
-                T_in = np.zeros_like(h_in)
-                T_in[solid_arg] = h_in[solid_arg] / self.cp
-                T_in[sl_arg] = self.T_melt
-                T_in[liquid_arg] = self.T_melt + (h_in[liquid_arg] - self.cp * self.T_melt - self.lh) / self.cp
-
-                used_T = np.concatenate([[self.T_arr[top_ind]], T_in, [self.T_arr[-1]]])
-                kr = np.zeros(len(ls_inner_ind))
-                liquid_len = min(max(len(liquid_ind) - 1, 0), len(ls_inner_ind))
-                kr[:liquid_len] = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * T_in[:liquid_len]))
-                fp_tmp = np.zeros(len(ls_inner_ind))
-                fp_tmp[:liquid_len] = self.fp_arr[top_ind + 1 : top_ind + 1 + liquid_len]
-                Q_rxn = self.dH * kr * fp_tmp / self.dx
-                # Q_rxn = self.dH * 2 * rho_arr[ls_inner_ind] / self.MW * kr
-                self.H_vap = self.get_H_vap(T_in[:liquid_len])
-                evap_heat = np.zeros(len(ls_inner_ind))
-                evap_heat[:liquid_len] = np.sum(self.Ei[:, 1 : liquid_len + 1] * self.H_vap, axis=0)
-                tmp_arr = (k_arr[ls_inner_ind] / self.dx**2 * (used_T[2:] - 2 * T_in + used_T[:-2]) - Q_rxn - evap_heat) / rho_arr[ls_inner_ind]
-                return tmp_arr
-
-            def h_top_rate(t, h_top):
-                k_avg = (k_arr[top_ind] + k_arr[top_ind + 1]) / 2
-                tmp_arr = (k_avg * (self.T_arr[top_ind + 1] - self.T_arr[top_ind]) / self.dx + self.q0) / self.dx / rho_arr[top_ind]
-                return tmp_arr
-
-            h_new[ls_inner_ind] = advance_rk4(h_rate, ti * self.dt, self.h_arr[ls_inner_ind], self.dt)
-            h_new[top_ind] = advance_rk4(h_top_rate, ti * self.dt, self.h_arr[top_ind], self.dt)
-            h_new[-1] = h_new[-2]
-            solid_arg = np.where(h_new < self.cp * self.T_melt)[0]
-            sl_arg = np.where((h_new >= self.cp * self.T_melt) & (h_new <= self.cp * self.T_melt + self.lh))[0]
-            liquid_arg = np.where(h_new > self.cp * self.T_melt + self.lh)[0]
-            T_new[solid_arg] = h_new[solid_arg] / self.cp
-            T_new[sl_arg] = self.T_melt
-            T_new[liquid_arg] = self.T_melt + (h_new[liquid_arg] - self.cp * self.T_melt - self.lh) / self.cp
-            self.phase_arr[solid_arg] = 0
-            self.phase_arr[sl_arg] = (h_new[sl_arg] - self.cp * self.T_melt) / self.lh
-            self.phase_arr[liquid_arg] = 2
-
-            if len(liquid_ind) > 0:
-                # fe mean "phi entire". Phi=letter for concentration, entire means combined polymer and decomposition products
-                def fe_rate(t, fe_in):
-                    # only inner points are updated, top and bottom are like boundary conditions assigned
-                    # bottom (solid-liquid interphase is always pure polymer)
-                    fe_top = np.concatenate([[self.fp_arr[liquid_ind[0]]], self.f_mat[:, liquid_ind[0]]])
-                    fe_bottom = np.concatenate([[self.fp_arr[liquid_ind[-1]]], self.f_mat[:, liquid_ind[-1]]])
-                    # to define all the grid points that are liquid
-                    used_fe = np.hstack([fe_top.reshape(-1, 1), fe_in, fe_bottom.reshape(-1, 1)])
-
-                    # terms within the species equation
-                    kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * self.T_arr[inner_ind]))
-                    rxn_rate = kr * fe_in[0, :] * 2 / self.N
-                    alpha_i = np.array([self.x_reaction(temp) for temp in self.T_arr[inner_ind]]).T
-                    beta_i = self.N * alpha_i / sum([(ii + 1) * alpha_i[ii, :] for ii in range(alpha_i.shape[0])])
-                    Ei = self.get_evaporation_rate(self.T_arr[inner_ind], fe_in[1:, :], fe_in[0, :])
-                    # for decomposition products (reaction + evaporation, Ei)
-                    source_i = beta_i * rxn_rate - Ei * self.dx
-                    # then combined (stack) polymer (first element with no evaporation) and decomposition products
-                    source = np.vstack([-rxn_rate.reshape(1, -1), source_i])
-                    tmp_arr = np.concatenate([[self.D], self.D_arr]).reshape(-1, 1) / self.dx**2 * (used_fe[:, 2:] - 2 * fe_in + used_fe[:, :-2]) + source
-                    return tmp_arr
-
-                def fe_boundary_rate(t, fe_bd):
-                    # terms within the species equation
-                    kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * self.T_arr[boundary_ind]))
-                    rxn_rate = kr * fe_bd[0, :] * 2 / self.N
-                    alpha_i = np.array([self.x_reaction(temp) for temp in self.T_arr[boundary_ind]]).T
-                    beta_i = self.N * alpha_i / sum([(ii + 1) * alpha_i[ii, :] for ii in range(alpha_i.shape[0])])
-                    Ei = self.get_evaporation_rate(self.T_arr[boundary_ind], fe_bd[1:, :], fe_bd[0, :])
-                    # for decomposition products (reaction + evaporation, Ei)
-                    source_i = beta_i * rxn_rate - Ei * self.dx
-                    # then combined (stack) polymer (first element with no evaporation) and decomposition products
-                    source = np.vstack([-rxn_rate.reshape(1, -1), source_i])
-                    return source
-
-                def fe_liquid_rate(t, fe_lq):
-                    # terms within the species equation
-                    kr = self.lumped_A * np.exp(-self.lumped_Ea / (cst.gas_constant * self.T_arr[liquid_ind]))
-                    alpha_i = np.array([self.x_reaction(temp) for temp in self.T_arr[liquid_ind]]).T
-                    if self.phase_equilibrium:
-                        Ei = self.get_evaporation_rate(self.T_arr[liquid_ind], fe_lq[1:, :], fe_lq[0, :])
-                    else:
-                        Ei = alpha_i * kr * fe_lq[0, :] / self.dx
-                    # for decomposition products (reaction + evaporation, Ei)
-                    source_i = alpha_i * kr * fe_lq[0, :] - Ei * self.dx
-                    source_p = sum([(ii + 1) * alpha_i[ii, :] for ii in range(alpha_i.shape[0])]) / self.N * kr * fe_lq[0, :]
-                    # then combined (stack) polymer (first element with no evaporation) and decomposition products
-                    source = np.vstack([-source_p.reshape(1, -1), source_i])
-                    return source
-
-                fe_mat = np.vstack([self.fp_arr.reshape(1, -1), self.f_mat])
-                fe_new[:, liquid_ind] = advance_rk4(fe_liquid_rate, ti * self.dt, fe_mat[:, liquid_ind], self.dt)
-
-                # if len(inner_ind) > 0:
-                #     fe_new[:, inner_ind] = advance_rk4(fe_rate, ti * self.dt, fe_mat[:, inner_ind], self.dt)
-                # fe_new[:, boundary_ind] = advance_rk4(fe_boundary_rate, ti * self.dt, fe_mat[:, boundary_ind], self.dt)
-
-                # if based on a too large time step some species concentration becomes negative.
-                # In this case it is forced to 0. To be fixed with non-fixed time-step
-                fe_new[fe_new < 0] = 0
-                fp_new = fe_new[0, :]
-                f_new = fe_new[1:, :]
-
-                h_arr = fp_new[liquid_ind] * self.MW / rho_arr[liquid_ind] + np.sum(f_new[:, liquid_ind] * self.MW_arr.reshape(-1, 1) / rho_arr[liquid_ind], axis=0)
-                h_arr = h_arr[::-1]
-
-                # thickness of the gas-phase (from balancing gas-phase mass produced and liquid-phase mass consumed)
-                self.dL += np.sum(self.Ei * self.dt * self.MW_arr.reshape(-1, 1) / self.rho_l * self.dx)
+                self.dL += np.sum(self.Ei_mat[:, liquid_ind] * self.dt * self.MW_arr.reshape(-1, 1) / self.rho_l * self.dx)
 
                 sum_h = np.array(list(itertools.accumulate(h_arr))) - h_arr / 2
                 new_top_ind = int(np.round(self.dL / self.dx))
@@ -847,13 +624,13 @@ class Polymer:
                     f_new[i, :] = get_new_f(f_new[i, :])
                 T_new[top_ind:new_top_ind] = np.nan
 
-            self.phase_arr[top_ind : int(np.round(self.dL / self.dx))] = 3
+            self.phase_arr[top_ind : int(np.round(self.dL / self.dx))] = 2
             self.T_arr = T_new.copy()
             self.h_arr = h_new.copy()
             self.fp_arr = fp_new.copy()
             self.f_mat = f_new.copy()
-            self.Ei_mat = np.full((self.Ns, self.Nx), np.nan)
-            self.Ei_mat[:, liquid_ind] = self.Ei.copy()
+            # self.Ei_mat = np.full((self.Ns, self.Nx), np.nan)
+            # self.Ei_mat[:, liquid_ind] = self.Ei.copy()
 
             if ti in self.t_arg_arr:
                 self.record_state()
@@ -893,6 +670,7 @@ def case42():
     tt.q0 = 1e5  # W/m2, heat flux from gas phase
     # tt.m_polymer_init = 10e-3  # kg, initial mass of polymer
     tt.eta = 7.4e-6  # m2/kg, effective surface area coefficient
+    tt.boundary_condition = "top q0"
 
     ### physical properties setting
     # tt.lumped_A = 2e11  # 1/s, lumped pre-exponential factor for polymer decomposition
@@ -957,6 +735,7 @@ def case45():
 
     tt.T0 = 300  # K, initial temperature
     tt.q0 = 1e5  # W/m2, heat flux from gas phase
+    tt.boundary_condition = "top q0"
 
     ### physical properties setting
     tt.lumped_A = 2 * 1.8e13  # 1/s, lumped pre-exponential factor for polymer decomposition
@@ -1007,6 +786,7 @@ def case47():
 
     tt.T0 = 300  # K, initial temperature
     tt.q0 = 1e5  # W/m2, heat flux from gas phase
+    tt.boundary_condition = "top q0"
 
     ### physical properties setting
     tt.lumped_A = 2 * 1.8e13  # 1/s, lumped pre-exponential factor for polymer decomposition
@@ -1055,8 +835,10 @@ def case52():
     tt.x_reaction = lambda T: np.array([1.0])
     tt.x_reaction_str = "lambda T: np.array([1.0])"
 
-    tt.T0 = 573  # K, initial temperature
-    tt.slope_Tb = 10 / 60  # K/s, heating rate
+    tt.T0 = 100 + 273  # K, initial temperature
+    tt.slope_Tb = 5 / 60  # K/s, heating rate
+    tt.impurity = 0.03  # polymer impurity percentage
+    tt.boundary_condition = "TGA"
 
     ### physical properties setting
     tt.lumped_A = 2 * 1.8e13  # 1/s, lumped pre-exponential factor for polymer decomposition
@@ -1076,8 +858,8 @@ def case52():
 
     ### Grid and time step setting
     tt.L = 4e-2  # m
-    tt.t_end = 1200  # s
-    tt.Nx = 100 + 1
+    tt.t_end = 4800  # s
+    tt.Nx = 200 + 1
     tt.t_num = 100000 + 1
     tt.t_store = 100
 
@@ -1085,7 +867,145 @@ def case52():
     tt.is_H_vap = False
     tt.min_interval = 2
     tt.check_point_step = 10000
-    tt.main_TGA()
+    tt.main()
+    return tt
+
+
+def case53():
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case53".format(work_dir)
+    tt.db_path = "{}/data/polymer_evaporation.xlsx".format(work_dir)
+    tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
+
+    ### SF-HyChem setting
+    tt.x_reaction = lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.
+    tt.x_reaction_str = 'lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.'
+
+    tt.T0 = 300 + 273  # K, initial temperature
+    tt.slope_Tb = 10 / 60  # K/s, heating rate
+    tt.impurity = 0.03  # polymer impurity percentage
+    tt.boundary_condition = "TGA"
+
+    ### physical properties setting    
+    tt.lumped_A = 2e13  # 1/s, lumped pre-exponential factor for polymer decomposition
+    tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
+    tt.T_melt = 240 + 273  # K, melting temperature
+    tt.k_s = 0.16  # W/m·K, solid phase thermal conductivity
+    tt.k_l = 0.135  # W/m·K, liquid phase thermal conductivity
+    tt.rho_s = 1.05e3  # kg/m3, solid phase density
+    tt.rho_l = 0.975e3  # kg/m3, liquid phase density
+    tt.MW0 = 104e-3  # kg/mol, C8H8 (styrene) molecular weight
+    tt.cv = 1.3e3  # J/kg·K
+    tt.cp = tt.cv
+    tt.dH = 73.4e3  # J/mol, heat absorbed by beta scission
+    tt.lh = 45e3  # J/kg, latent heat of fuel melting
+    tt.N = 3000  # number of polymer degree
+    tt.D = 3e-12  # m2/s, polymer diffusion coefficient
+
+    ### Grid and time step setting
+    tt.L = 4e-2  # m
+    tt.t_end = 1200  # s
+    tt.Nx = 200 + 1
+    tt.t_num = 100000 + 1
+    tt.t_store = 100
+
+    tt.phase_equilibrium = False
+    tt.is_H_vap = True
+    tt.min_interval = 2
+    tt.check_point_step = 10000
+    tt.main()
+    return tt
+
+def case54():
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case54".format(work_dir)
+    tt.db_path = "{}/data/polymer_evaporation.xlsx".format(work_dir)
+    tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
+
+    ### SF-HyChem setting
+    tt.x_reaction = lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.
+    tt.x_reaction_str = 'lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.'
+
+    tt.T0 = 300 + 273  # K, initial temperature
+    tt.slope_Tb = 10 / 60  # K/s, heating rate
+    tt.impurity = 0.03  # polymer impurity percentage
+    tt.eta = 7.4e-6  # m2/kg, effective surface area coefficient
+    tt.boundary_condition = "TGA"
+
+    ### physical properties setting    
+    tt.lumped_A = 2e13  # 1/s, lumped pre-exponential factor for polymer decomposition
+    tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
+    tt.T_melt = 240 + 273  # K, melting temperature
+    tt.k_s = 0.16  # W/m·K, solid phase thermal conductivity
+    tt.k_l = 0.135  # W/m·K, liquid phase thermal conductivity
+    tt.rho_s = 1.05e3  # kg/m3, solid phase density
+    tt.rho_l = 0.975e3  # kg/m3, liquid phase density
+    tt.MW0 = 104e-3  # kg/mol, C8H8 (styrene) molecular weight
+    tt.cv = 1.3e3  # J/kg·K
+    tt.cp = tt.cv
+    tt.dH = 73.4e3  # J/mol, heat absorbed by beta scission
+    tt.lh = 45e3  # J/kg, latent heat of fuel melting
+    tt.N = 3000  # number of polymer degree
+    tt.D = 3e-12  # m2/s, polymer diffusion coefficient
+
+    ### Grid and time step setting
+    tt.L = 4e-2  # m
+    tt.t_end = 1200  # s
+    tt.Nx = 200 + 1
+    tt.t_num = 100000 + 1
+    tt.t_store = 100
+
+    tt.phase_equilibrium = True
+    tt.is_H_vap = True
+    tt.min_interval = 2
+    tt.check_point_step = 10000
+    tt.main()
+    return tt
+
+def case55():
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case55".format(work_dir)
+    tt.db_path = "{}/data/polymer_evaporation.xlsx".format(work_dir)
+    tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
+
+    ### SF-HyChem setting
+    tt.x_reaction = lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.
+    tt.x_reaction_str = 'lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.'
+
+    tt.T0 = 300 + 273  # K, initial temperature
+    tt.slope_Tb = 10 / 60  # K/s, heating rate
+    tt.impurity = 0.03  # polymer impurity percentage
+    tt.eta = 7.4e-6  # m2/kg, effective surface area coefficient
+    tt.boundary_condition = "TGA"
+
+    ### physical properties setting    
+    tt.lumped_A = 2e13  # 1/s, lumped pre-exponential factor for polymer decomposition
+    tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
+    tt.T_melt = 240 + 273  # K, melting temperature
+    tt.k_s = 0.16  # W/m·K, solid phase thermal conductivity
+    tt.k_l = 0.135  # W/m·K, liquid phase thermal conductivity
+    tt.rho_s = 1.05e3  # kg/m3, solid phase density
+    tt.rho_l = 0.975e3  # kg/m3, liquid phase density
+    tt.MW0 = 104e-3  # kg/mol, C8H8 (styrene) molecular weight
+    tt.cv = 1.3e3  # J/kg·K
+    tt.cp = tt.cv
+    tt.dH = 73.4e3  # J/mol, heat absorbed by beta scission
+    tt.lh = 45e3  # J/kg, latent heat of fuel melting
+    tt.N = 3000  # number of polymer degree
+    tt.D = 3e-12  # m2/s, polymer diffusion coefficient
+
+    ### Grid and time step setting
+    tt.L = 1e-2  # m
+    tt.t_end = 1200  # s
+    tt.Nx = 200 + 1
+    tt.t_num = 100000 + 1
+    tt.t_store = 100
+
+    tt.phase_equilibrium = True
+    tt.is_H_vap = True
+    tt.min_interval = 2
+    tt.check_point_step = 10000
+    tt.main()
     return tt
 
 
@@ -1096,4 +1016,8 @@ def anchor_point():
 if __name__ == "__main__":
     # tt = case42()
     # tt = case45()
+    # tt = case52()
+    # tt = case53()
+    # tt = case54()
+    tt = case55()
     pass
