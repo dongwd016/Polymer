@@ -878,15 +878,15 @@ def case53():
     tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
 
     ### SF-HyChem setting
-    tt.x_reaction = lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.
-    tt.x_reaction_str = 'lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.'
+    tt.x_reaction = lambda T: np.array([1 - 33288 * T**-2.174 - 714581 * T**-2.743, 33288 * T**-2.174, 714581 * T**-2.743])  # expt.
+    tt.x_reaction_str = "lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt."
 
     tt.T0 = 300 + 273  # K, initial temperature
     tt.slope_Tb = 10 / 60  # K/s, heating rate
     tt.impurity = 0.03  # polymer impurity percentage
     tt.boundary_condition = "TGA"
 
-    ### physical properties setting    
+    ### physical properties setting
     tt.lumped_A = 2e13  # 1/s, lumped pre-exponential factor for polymer decomposition
     tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
     tt.T_melt = 240 + 273  # K, melting temperature
@@ -916,6 +916,7 @@ def case53():
     tt.main()
     return tt
 
+
 def case54():
     tt = Polymer()
     tt.folder = "{}/output/integrated/Case54".format(work_dir)
@@ -923,8 +924,8 @@ def case54():
     tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
 
     ### SF-HyChem setting
-    tt.x_reaction = lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.
-    tt.x_reaction_str = 'lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.'
+    tt.x_reaction = lambda T: np.array([1 - 33288 * T**-2.174 - 714581 * T**-2.743, 33288 * T**-2.174, 714581 * T**-2.743])  # expt.
+    tt.x_reaction_str = "lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt."
 
     tt.T0 = 300 + 273  # K, initial temperature
     tt.slope_Tb = 10 / 60  # K/s, heating rate
@@ -932,8 +933,8 @@ def case54():
     tt.eta = 7.4e-6  # m2/kg, effective surface area coefficient
     tt.boundary_condition = "TGA"
 
-    ### physical properties setting    
-    tt.lumped_A = 2e13  # 1/s, lumped pre-exponential factor for polymer decomposition
+    ### physical properties setting
+    tt.lumped_A = 2e11 * 3000  # 1/s, lumped pre-exponential factor for polymer decomposition
     tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
     tt.T_melt = 240 + 273  # K, melting temperature
     tt.k_s = 0.16  # W/m·K, solid phase thermal conductivity
@@ -962,6 +963,7 @@ def case54():
     tt.main()
     return tt
 
+
 def case55():
     tt = Polymer()
     tt.folder = "{}/output/integrated/Case55".format(work_dir)
@@ -969,8 +971,8 @@ def case55():
     tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
 
     ### SF-HyChem setting
-    tt.x_reaction = lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.
-    tt.x_reaction_str = 'lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt.'
+    tt.x_reaction = lambda T: np.array([1 - 33288 * T**-2.174 - 714581 * T**-2.743, 33288 * T**-2.174, 714581 * T**-2.743])  # expt.
+    tt.x_reaction_str = "lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt."
 
     tt.T0 = 300 + 273  # K, initial temperature
     tt.slope_Tb = 10 / 60  # K/s, heating rate
@@ -978,8 +980,8 @@ def case55():
     tt.eta = 7.4e-6  # m2/kg, effective surface area coefficient
     tt.boundary_condition = "TGA"
 
-    ### physical properties setting    
-    tt.lumped_A = 2e13  # 1/s, lumped pre-exponential factor for polymer decomposition
+    ### physical properties setting
+    tt.lumped_A = 2e11 * 3000  # 1/s, lumped pre-exponential factor for polymer decomposition
     tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
     tt.T_melt = 240 + 273  # K, melting temperature
     tt.k_s = 0.16  # W/m·K, solid phase thermal conductivity

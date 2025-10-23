@@ -206,8 +206,6 @@ class Evaporation:
         outer_t_arr = np.linspace(0, self.t_end, self.t_num)
         dt_arr = np.diff(outer_t_arr)
         for ind, (ti, dt) in enumerate(tzip(outer_t_arr, dt_arr)):
-            if ind == 215:
-                a = 1
             if self.m_polymer == 0 and np.sum(self.n_arr) == 0:
                 self.t = ti
                 self.temp = self.temp_control(self.t)
