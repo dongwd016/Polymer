@@ -107,7 +107,7 @@ def get_q(f, diffusion_term=True, soret_effect=True, radiation_term=True, ee=1.0
 
         gas.TPX = T[i0], P, X0
         if f.soret_enabled and soret_effect:
-            DT_mc = gas.thermal_diff_coeffs  # m2/s]
+            DT_mc = gas.thermal_diff_coeffs  # m2/s
             xDT_dlnTdz = X0 * DT_mc * (dTdz / T[i0])
         else:
             xDT_dlnTdz = None
