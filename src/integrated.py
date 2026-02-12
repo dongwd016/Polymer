@@ -79,6 +79,7 @@ class Polymer:
             "folder",
             "T0",
             "q0",
+            "q0_func_str",
             "qb",
             "k_s",
             "k_l",
@@ -136,6 +137,8 @@ class Polymer:
         # Transient related (heat transfer, non-uniform temperature)
         self.T0 = None  # K
         self.q0 = None  # W/m2, heat flux from gas phase
+        self.q0_func = None  # W/m2, heat flux from gas phase as a function of time
+        self.q0_func_str = None  # string of q0_func to store in case_dict
         self.qb = None  # W/m2, heat flux from the bottom
         self.k_s = None  # W/m·K, solid phase thermal conductivity
         self.k_l = None  # W/m·K, liquid phase thermal conductivity
@@ -298,6 +301,7 @@ class Polymer:
         self.x_arr = np.linspace(0, self.L, self.Nx)
         self.t_arr = np.linspace(0, self.t_end, self.t_num)
         self.t_arg_arr = np.arange(0, self.t_num, self.t_store, dtype=int)
+        self.Nt = len(self.t_arg_arr)
         self.t_store_arr = self.t_arr[self.t_arg_arr]
         self.dt = self.t_arr[1] - self.t_arr[0]
         self.dx = self.x_arr[1] - self.x_arr[0]
@@ -415,6 +419,8 @@ class Polymer:
                 return frac * self.k_l + (1 - frac) * self.k_s
 
         for ti in tqdm(range(self.check_point_ti + 1, self.t_num), mininterval=self.min_interval):
+            if self.q0_func is not None:
+                self.q0 = self.q0_func(self.t_arr[ti])
             T_new = np.full(self.Nx, np.nan)
             h_new = np.full(self.Nx, np.nan)
             fp_new = np.full(self.Nx, np.nan)
@@ -436,7 +442,7 @@ class Polymer:
 
             self.Ei_mat = np.full((self.Ns, self.Nx), np.nan)
             self.Ei_mat[:, liquid_ind] = 0
-            impurity_factor = np.maximum(1 - self.impurity * self.L / (self.L - self.dL), 0)
+            impurity_factor = np.maximum(1 - self.impurity * self.L / (self.L - self.dL), 0) if self.impurity is not None else 1.0
             # No liquid layer if len(liquid_ind) =< 3
             if len(liquid_ind) > 0:
                 # Species equation (solved before T equation)
@@ -774,6 +780,55 @@ def case45():
     return tt
 
 
+def case46():
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case46".format(work_dir)
+    tt.db_path = "{}/data/polymer_evaporation.xlsx".format(work_dir)
+    tt.sp_name_list = ["CH2O"]
+
+    ### SF-HyChem setting
+    tt.x_reaction = lambda T: np.array([1.0])
+    tt.x_reaction_str = "lambda T: np.array([1.0])"
+
+    tt.T0 = 300  # K, initial temperature
+    tt.q0 = 1e5  # W/m2, heat flux from gas phase
+
+    ### physical properties setting
+    tt.lumped_A = 2 * 1.8e13  # 1/s, lumped pre-exponential factor for polymer decomposition
+    tt.lumped_Ea = 30e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
+    tt.T_melt = 165 + 273  # K, melting temperature
+    tt.k_s = 0.33  # W/m·K, solid phase thermal conductivity
+    tt.k_l = 0.14  # W/m·K, liquid phase thermal conductivity
+    tt.rho_s = 1.42e3  # kg/m3, solid phase density
+    tt.rho_l = 1.2e3  # kg/m3, liquid phase density
+    tt.MW0 = 30e-3  # kg/mol, CH2O molecular weight
+    tt.cv = 35 / tt.MW0  # J/kg·K
+    tt.cp = tt.cv
+    tt.dH = 56e3  # J/mol, heat absorbed by beta scission
+    tt.lh = 150e3  # J/kg, latent heat of fuel melting
+    tt.N = 3333  # number of polymer degree
+    tt.D = 0  # m2/s, polymer diffusion coefficient
+
+    ### Grid and time step setting
+    # tt.L = 1e-2  # m
+    # tt.t_end = 800  # s
+    # tt.Nx = 50 + 1
+    # tt.t_num = 100000 + 1
+    # tt.t_store = 100
+
+    tt.L = 2e-2  # m
+    tt.t_end = 400  # s
+    tt.Nx = 5000 + 1
+    tt.t_num = 10000000 + 1
+    tt.t_store = 1000
+
+    tt.phase_equilibrium = False
+    tt.is_H_vap = False
+    tt.min_interval = 120
+    tt.check_point_step = 100000
+    tt.main()
+
+
 def case47():
     tt = Polymer()
     tt.folder = "{}/output/integrated/Case47".format(work_dir)
@@ -1011,6 +1066,314 @@ def case55():
     return tt
 
 
+def case56():
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case56".format(work_dir)
+    tt.db_path = "{}/data/polymer_evaporation.xlsx".format(work_dir)
+    tt.sp_name_list = ["Styrene", "Styrene dimer", "Styrene trimer"]
+    # tt.sp_name_list = ["Styrene"]
+
+    ### SF-HyChem setting
+    # tt.x_reaction = lambda T: np.array([8, 4, 2, 1, 1], dtype=float)
+    # tt.x_reaction_str = 'lambda T: np.array([8, 4, 2, 1, 1], dtype=float)'
+    # tt.x_reaction = lambda T: np.array([0.9, 0.05, 0.05], dtype=float)
+    # tt.x_reaction_str = "lambda T: np.array([0.9, 0.05, 0.05], dtype=float)"
+    tt.x_reaction = lambda T: np.array([1 - 33288 * T**-2.174 - 714581 * T**-2.743, 33288 * T**-2.174, 714581 * T**-2.743])  # expt.
+    tt.x_reaction_str = "lambda T: np.array([1 - 33288 * T ** -2.174 - 714581 * T ** -2.743, 33288 * T ** -2.174, 714581 * T ** -2.743])  # expt."
+    # tt.x_reaction = lambda T: np.array([1 - 487185 * T ** -2.413 - 6e9 * T ** -4.192, 487185 * T ** -2.413, 6e9 * T ** -4.192])  # CRECK model
+    # tt.x_reaction_str = 'lambda T: np.array([1 - 487185 * T ** -2.413 - 6e9 * T ** -4.192, 487185 * T ** -2.413, 6e9 * T ** -4.192])  # CRECK model'
+    # tt.x_reaction = lambda T: np.array([1.0])
+    # tt.x_reaction_str = 'lambda T: np.array([1.0])'
+
+    tt.T0 = 300  # K, initial temperature
+    tt.q0 = 1e5  # W/m2, heat flux from gas phase
+    # tt.m_polymer_init = 10e-3  # kg, initial mass of polymer
+    tt.eta = 7.4e-6  # m2/kg, effective surface area coefficient
+    tt.boundary_condition = "top q0"
+
+    ### physical properties setting
+    # tt.lumped_A = 2e11  # 1/s, lumped pre-exponential factor for polymer decomposition
+    # tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
+    # tt.T_melt = 165 + 273  # K, melting temperature
+    # tt.k_s = 0.33  # W/m·K, solid phase thermal conductivity
+    # tt.k_l = 0.14  # W/m·K, liquid phase thermal conductivity
+    # tt.rho_s = 1.42e3  # kg/m3, solid phase density
+    # tt.rho_l = 1.2e3  # kg/m3, liquid phase density
+    # tt.MW0 = 30e-3  # kg/mol, CH2O molecular weight
+    # tt.cv = 35 / tt.MW0  # J/kg·K
+    # tt.cp = tt.cv
+    # tt.dH = 56e3  # J/mol, heat absorbed by beta scission
+    # tt.lh = 150e3  # J/kg, latent heat of fuel melting
+    # tt.N = 3000  # number of polymer degree
+    # tt.D = 0  # m2/s, polymer diffusion coefficient
+
+    tt.lumped_A = 2e13  # 1/s, lumped pre-exponential factor for polymer decomposition
+    tt.lumped_Ea = 43e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
+    tt.T_melt = 240 + 273  # K, melting temperature
+    tt.k_s = 0.16  # W/m·K, solid phase thermal conductivity
+    tt.k_l = 0.135  # W/m·K, liquid phase thermal conductivity
+    tt.rho_s = 1.05e3  # kg/m3, solid phase density
+    tt.rho_l = 0.975e3  # kg/m3, liquid phase density
+    tt.MW0 = 104e-3  # kg/mol, C8H8 (styrene) molecular weight
+    tt.cv = 1.3e3  # J/kg·K
+    tt.cp = tt.cv
+    tt.dH = 73.4e3  # J/mol, heat absorbed by beta scission
+    tt.lh = 45e3  # J/kg, latent heat of fuel melting
+    tt.N = 3000  # number of polymer degree
+    tt.D = 3e-12  # m2/s, polymer diffusion coefficient
+    ### physical properties setting
+
+    ### Grid and time step setting
+    # tt.L = 1e-2  # m
+    # tt.t_end = 800  # s
+    # tt.Nx = 50 + 1
+    # tt.t_num = 100000 + 1
+    # tt.t_store = 100
+
+    # tt.L = 2e-2  # m
+    # tt.t_end = 400  # s
+    # tt.Nx = 500 + 1
+    # tt.t_num = 100000 + 1
+    # tt.t_store = 100
+
+    tt.L = 4e-2  # m
+    tt.t_end = 400  # s
+    tt.Nx = 10000 + 1
+    tt.t_num = 10000000 + 1
+    tt.t_store = 1000
+    ### Grid and time step setting
+
+    tt.phase_equilibrium = False
+    tt.min_interval = 2
+    tt.check_point_step = 100000
+    # tt.main()
+    return tt
+
+
+def case57():
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case57".format(work_dir)
+    tt.db_path = "{}/data/polymer_evaporation.xlsx".format(work_dir)
+    tt.sp_name_list = ["CH2O"]
+
+    ### SF-HyChem setting
+    tt.x_reaction = lambda T: np.array([1.0])
+    tt.x_reaction_str = "lambda T: np.array([1.0])"
+
+    tt.T0 = 300  # K, initial temperature
+    tt.q0_func = lambda t: 1e5 + 1e5 * np.sin(2 * cst.pi * t / (10 + 9 * np.sin(2 * cst.pi * t / 400))) * (
+        (int(t / (10 + 9 * np.sin(2 * cst.pi * t / 400))) + 1) % 2
+    )  # W/m2, heat flux from gas phase as a function of time
+    tt.q0_func_str = "lambda t: 1e5 + 1e5 * np.sin(2 * cst.pi * t / (10 + 9 * np.sin(2 * cst.pi * t / 400))) * ((int(t / (10 + 9 * np.sin(2 * cst.pi * t / 400))) + 1) % 2)"
+    tt.boundary_condition = "top q0"
+
+    ### physical properties setting
+    tt.lumped_A = 2 * 1.8e13  # 1/s, lumped pre-exponential factor for polymer decomposition
+    tt.lumped_Ea = 30e3 * cst.calorie  # J/mol, lumped activation energy for polymer decomposition
+    tt.T_melt = 165 + 273  # K, melting temperature
+    tt.k_s = 0.33  # W/m·K, solid phase thermal conductivity
+    tt.k_l = 0.14  # W/m·K, liquid phase thermal conductivity
+    tt.rho_s = 1.42e3  # kg/m3, solid phase density
+    tt.rho_l = 1.2e3  # kg/m3, liquid phase density
+    tt.MW0 = 30e-3  # kg/mol, CH2O molecular weight
+    tt.cv = 35 / tt.MW0  # J/kg·K
+    tt.cp = tt.cv
+    tt.dH = 56e3  # J/mol, heat absorbed by beta scission
+    tt.lh = 150e3  # J/kg, latent heat of fuel melting
+    tt.N = 3333  # number of polymer degree
+    tt.D = 0  # m2/s, polymer diffusion coefficient
+
+    ### Grid and time step setting
+    # tt.L = 1e-2  # m
+    # tt.t_end = 800  # s
+    # tt.Nx = 50 + 1
+    # tt.t_num = 100000 + 1
+    # tt.t_store = 100
+
+    tt.L = 2e-2  # m
+    tt.t_end = 400  # s
+    tt.Nx = 5000 + 1
+    tt.t_num = 10000000 + 1
+    tt.t_store = 1000
+
+    tt.phase_equilibrium = False
+    tt.is_H_vap = False
+    tt.min_interval = 2
+    tt.check_point_step = 100000
+    tt.main()
+
+
+def case58():
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case58".format(work_dir)
+    tt.db_path = "{}/data/polymer_evaporation.xlsx".format(work_dir)
+    tt.sp_name_list = ["CH2O"]
+
+    ### SF-HyChem setting
+    tt.x_reaction = lambda T: np.array([1.0])
+    tt.x_reaction_str = "lambda T: np.array([1.0])"
+
+    tt.T0 = 300  # K, initial temperature
+    tt.q0_func = lambda t: 1e5 * (1 - np.exp(-t / 20e-3)) + (1e5 * (1 - np.exp(-t / 20e-3)) + 0.5e5 * (1 - np.exp(-t / 20e-3))) * np.sin(
+        2 * np.pi * t / 10e-3
+    )  # W/m2, heat flux from gas phase as a function of time
+    tt.q0_func_str = "lambda t: 1e5 * (1 - np.exp(-t / 20e-3)) + (1e5 * (1 - np.exp(-t / 20e-3)) + 0.5e5 * (1 - np.exp(-t / 20e-3))) * np.sin(2 * np.pi * t / 10e-3)"
+    tt.boundary_condition = "top q0"
+
+    ### physical properties setting
+    tt.D = 0  # m2/s, polymer diffusion coefficient
+
+    prop_dict = json.load(open("{}/output/property_dict/POM.json".format(work_dir), "r"))
+    tt.T_melt = prop_dict["T_melt"]
+    tt.k_l = prop_dict["k_l"]
+    tt.k_s = prop_dict["k_s"]
+    tt.rho_l = prop_dict["rho_l"]
+    tt.rho_s = prop_dict["rho_s"]
+    tt.MW0 = prop_dict["MW0"]
+    A_beta = prop_dict["A_beta"]
+    tt.lumped_Ea = prop_dict["lumped_Ea"]
+    tt.dH = prop_dict["dH"]
+    MW = prop_dict["MW"]
+    tt.lh = prop_dict["lh"]
+    tt.cp = prop_dict["cp"]
+
+    tt.N = MW / tt.MW0  # number of polymer degree
+    tt.lumped_A = 2 * A_beta  # 1/s
+
+    ### Grid and time step setting
+    # tt.L = 1e-2  # m
+    # tt.t_end = 800  # s
+    # tt.Nx = 50 + 1
+    # tt.t_num = 100000 + 1
+    # tt.t_store = 100
+
+    tt.L = 2e-2  # m
+    tt.t_end = 400  # s
+    tt.Nx = 5000 + 1
+    tt.t_num = 10000000 + 1
+    tt.t_store = 1000
+
+    tt.phase_equilibrium = False
+    tt.is_H_vap = False
+    tt.min_interval = 2
+    tt.check_point_step = 100000
+    tt.main()
+
+
+def case59():
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case59".format(work_dir)
+    tt.db_path = "{}/data/polymer_evaporation.xlsx".format(work_dir)
+    tt.sp_name_list = ["CH2O"]
+
+    ### SF-HyChem setting
+    tt.x_reaction = lambda T: np.array([1.0])
+    tt.x_reaction_str = "lambda T: np.array([1.0])"
+
+    tt.T0 = 500  # K, initial temperature
+    tt.q0_func = lambda t: 1e5 * (1 - np.exp(-t / 20e-3)) + (1e5 * (1 - np.exp(-t / 20e-3)) + 0.5e5 * (1 - np.exp(-t / 20e-3))) * np.sin(
+        2 * np.pi * t / 10e-3
+    )  # W/m2, heat flux from gas phase as a function of time
+    tt.q0_func_str = "lambda t: 1e5 * (1 - np.exp(-t / 20e-3)) + (1e5 * (1 - np.exp(-t / 20e-3)) + 0.5e5 * (1 - np.exp(-t / 20e-3))) * np.sin(2 * np.pi * t / 10e-3)"
+    tt.boundary_condition = "top q0"
+
+    ### physical properties setting
+    tt.D = 0  # m2/s, polymer diffusion coefficient
+
+    prop_dict = json.load(open("{}/output/property_dict/POM.json".format(work_dir), "r"))
+    tt.T_melt = prop_dict["T_melt"]
+    tt.k_l = prop_dict["k_l"]
+    tt.k_s = prop_dict["k_s"]
+    tt.rho_l = prop_dict["rho_l"]
+    tt.rho_s = prop_dict["rho_s"]
+    tt.MW0 = prop_dict["MW0"]
+    A_beta = prop_dict["A_beta"]
+    tt.lumped_Ea = prop_dict["lumped_Ea"]
+    tt.dH = prop_dict["dH"]
+    MW = prop_dict["MW"]
+    tt.lh = prop_dict["lh"]
+    tt.cp = prop_dict["cp"]
+
+    tt.N = MW / tt.MW0  # number of polymer degree
+    tt.lumped_A = 2 * A_beta  # 1/s
+
+    ### Grid and time step setting
+    # tt.L = 1e-2  # m
+    # tt.t_end = 800  # s
+    # tt.Nx = 50 + 1
+    # tt.t_num = 100000 + 1
+    # tt.t_store = 100
+
+    tt.L = 2e-2  # m
+    tt.t_end = 0.1  # s
+    tt.Nx = 5000 + 1
+    tt.t_num = 10000 + 1
+    tt.t_store = 1
+
+    tt.phase_equilibrium = False
+    tt.is_H_vap = False
+    tt.min_interval = 2
+    tt.check_point_step = 100
+    tt.main()
+
+
+def case60():
+    tt = Polymer()
+    tt.folder = "{}/output/integrated/Case60".format(work_dir)
+    tt.db_path = "{}/data/polymer_evaporation.xlsx".format(work_dir)
+    tt.sp_name_list = ["CH2O"]
+
+    ### SF-HyChem setting
+    tt.x_reaction = lambda T: np.array([1.0])
+    tt.x_reaction_str = "lambda T: np.array([1.0])"
+
+    tt.q0_func = lambda t: 1e5 * (1 - np.exp(-t / 20e-3)) + (1e5 * (1 - np.exp(-t / 20e-3)) + 0.5e5 * (1 - np.exp(-t / 20e-3))) * np.sin(
+        2 * np.pi * t / 10e-3
+    )  # W/m2, heat flux from gas phase as a function of time
+    tt.q0_func_str = "lambda t: 1e5 * (1 - np.exp(-t / 20e-3)) + (1e5 * (1 - np.exp(-t / 20e-3)) + 0.5e5 * (1 - np.exp(-t / 20e-3))) * np.sin(2 * np.pi * t / 10e-3)"
+    tt.boundary_condition = "top q0"
+
+    ### physical properties setting
+    tt.D = 0  # m2/s, polymer diffusion coefficient
+
+    prop_dict = json.load(open("{}/output/property_dict/POM.json".format(work_dir), "r"))
+    tt.T_melt = prop_dict["T_melt"]
+    tt.T0 = tt.T_melt  # K, initial temperature
+    tt.k_l = prop_dict["k_l"]
+    tt.k_s = prop_dict["k_s"]
+    tt.rho_l = prop_dict["rho_l"]
+    tt.rho_s = prop_dict["rho_s"]
+    tt.MW0 = prop_dict["MW0"]
+    A_beta = prop_dict["A_beta"]
+    tt.lumped_Ea = prop_dict["lumped_Ea"]
+    tt.dH = prop_dict["dH"]
+    MW = prop_dict["MW"]
+    tt.lh = prop_dict["lh"]
+    tt.cp = prop_dict["cp"]
+
+    tt.N = MW / tt.MW0  # number of polymer degree
+    tt.lumped_A = 2 * A_beta  # 1/s
+
+    ### Grid and time step setting
+    # tt.L = 1e-2  # m
+    # tt.t_end = 800  # s
+    # tt.Nx = 50 + 1
+    # tt.t_num = 100000 + 1
+    # tt.t_store = 100
+
+    tt.L = 2e-2  # m
+    tt.t_end = 0.1  # s
+    tt.Nx = 5000 + 1
+    tt.t_num = 10000 + 1
+    tt.t_store = 1
+
+    tt.phase_equilibrium = False
+    tt.is_H_vap = False
+    tt.min_interval = 2
+    tt.check_point_step = 1000
+    tt.main()
+
+
 def anchor_point():
     pass
 
@@ -1021,5 +1384,9 @@ if __name__ == "__main__":
     # tt = case52()
     # tt = case53()
     # tt = case54()
-    tt = case55()
+    # tt = case55()
+    # tt = case57()
+    # tt = case58()
+    # tt = case59()
+    tt = case60()
     pass
