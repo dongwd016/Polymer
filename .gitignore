@@ -9,6 +9,7 @@ node_modules
 Thumbs.db
 
 # Project specific ignore
+__pycache__/
 *~$*
 src/output
 src/.DS_Store

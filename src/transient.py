@@ -17,13 +17,12 @@ plt.rc("xtick", labelsize=11)
 plt.rc("ytick", labelsize=11)
 plt.rc("lines", linewidth=2)
 plt.rcParams["animation.html"] = "jshtml"
-plt.rcParams["animation.ffmpeg_path"] = "C:/Program Files/ffmpeg/bin/ffmpeg.exe"
 plt.rcParams["animation.embed_limit"] = 50
 mu_sb = "\u03bc"
 deg_sb = "\u00b0"
 
-root_dir = "D:/DocumentAll/Research"
-work_dir = "{}/2-Polymer".format(root_dir)
+# Inputs are read from src/data/; results are written to src/output/ (git-ignored).
+work_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 def json_convert(obj):

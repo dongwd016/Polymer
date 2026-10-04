@@ -25,11 +25,8 @@ plt.rc("lines", linewidth=2)
 mu_sb = "\u03bc"
 deg_sb = "\u00b0"
 
-root_dir = "D:/DocumentAll/Research"
-work_dir = "{}/2-Polymer".format(root_dir)
-
-
-# work_dir = '.'
+# Inputs are read from src/data/; results are written to src/output/ (git-ignored).
+work_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 def json_convert(obj):
@@ -1223,7 +1220,7 @@ def case58():
     ### physical properties setting
     tt.D = 0  # m2/s, polymer diffusion coefficient
 
-    prop_dict = json.load(open("{}/output/property_dict/POM.json".format(work_dir), "r"))
+    prop_dict = json.load(open("{}/data/POM.json".format(work_dir), "r"))
     tt.T_melt = prop_dict["T_melt"]
     tt.k_l = prop_dict["k_l"]
     tt.k_s = prop_dict["k_s"]
@@ -1280,7 +1277,7 @@ def case59():
     ### physical properties setting
     tt.D = 0  # m2/s, polymer diffusion coefficient
 
-    prop_dict = json.load(open("{}/output/property_dict/POM.json".format(work_dir), "r"))
+    prop_dict = json.load(open("{}/data/POM.json".format(work_dir), "r"))
     tt.T_melt = prop_dict["T_melt"]
     tt.k_l = prop_dict["k_l"]
     tt.k_s = prop_dict["k_s"]
@@ -1336,7 +1333,7 @@ def case60():
     ### physical properties setting
     tt.D = 0  # m2/s, polymer diffusion coefficient
 
-    prop_dict = json.load(open("{}/output/property_dict/POM.json".format(work_dir), "r"))
+    prop_dict = json.load(open("{}/data/POM.json".format(work_dir), "r"))
     tt.T_melt = prop_dict["T_melt"]
     tt.T0 = tt.T_melt  # K, initial temperature
     tt.k_l = prop_dict["k_l"]

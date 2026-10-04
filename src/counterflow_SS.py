@@ -7,8 +7,8 @@ import scipy
 from scipy import constants as cst
 from tqdm.auto import tqdm
 
-root_dir = "D:/DocumentAll/Research"
-work_dir = "{}/2-Polymer".format(root_dir)
+# Inputs are read from src/data/; results are written to src/output/ (git-ignored).
+work_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 def json_convert(obj):

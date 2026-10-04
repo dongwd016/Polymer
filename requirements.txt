@@ -1,0 +1,8 @@
+numpy
+scipy
+pandas
+openpyxl
+matplotlib
+tqdm
+cantera
+h5py
